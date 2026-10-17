@@ -1155,6 +1155,13 @@ function startLevel(idx) {
   game.limit = courseLen / 5.5;
   buildWaves(L.waveScale); uploadWaves();
   resetEnv(L); syncPanel();
+  // Snap chase camera into place (avoid lerping from the title orbit position
+  // which can swing through the top-down singularity and snap the view).
+  { const bb = game.boat, ffx = Math.cos(bb.h), ffz = Math.sin(bb.h);
+    const st = (typeof simTime !== 'undefined') ? simTime : 2.0;
+    const wwy = waveH(bb.x, bb.z, st), ddx = bb.x - ffx * ev('camDist', L), ddz = bb.z - ffz * ev('camDist', L);
+    cam.pos[0] = ddx; cam.pos[2] = ddz;
+    cam.pos[1] = Math.max(wwy + ev('camH', L), waveH(ddx, ddz, st) + 2.4); }
   wake.samples.length = 0;
   setState(GS.COUNT); game.countT = 3.6;
   document.getElementById('gateinfo').textContent = `GATE 0/${L.gates}`;
@@ -1432,7 +1439,11 @@ function updateCamera(dt, wt) {
   const lx = b.x + fx * 7, ly = wy + 1.7, lz = b.z + fz * 7;
   let fw = [lx - cam.pos[0], ly - cam.pos[1], lz - cam.pos[2]];
   const fl = Math.hypot(fw[0], fw[1], fw[2]) || 1; fw = [fw[0]/fl, fw[1]/fl, fw[2]/fl];
-  let rt = cross(fw, [0, 1, 0]);
+  // Guard: if looking nearly straight down, cross(fw, up) degenerates and the
+  // view snaps/rotates arbitrarily. Use the boat's forward as reference instead.
+  let refUp = [0, 1, 0];
+  if (Math.abs(fw[1]) > 0.94) refUp = [fx, 0, fz];
+  let rt = cross(fw, refUp);
   const rl = Math.hypot(rt[0], rt[1], rt[2]) || 1; rt = [rt[0]/rl, rt[1]/rl, rt[2]/rl];
   const up = cross(rt, fw);
   cam.fwd = fw; cam.right = rt; cam.up = up;
@@ -1443,10 +1454,7 @@ function cross(a, b) {
 function mat4Persp(out, tanH, aspect, near, far) {
   const f = 1 / tanH;
   out.fill(0);
-  // NOTE: out[5] is NEGATED to flip Y, matching the raymarched water which
-  // manually flips Y for the canvas (see fsMain ndc computation). Without
-  // this, meshes render vertically mirrored relative to the water.
-  out[0] = f / aspect; out[5] = -f; out[10] = far / (far - near); out[11] = 1;
+  out[0] = f / aspect; out[5] = f; out[10] = far / (far - near); out[11] = 1;
   out[14] = -far * near / (far - near);
   return out;
 }
@@ -1674,7 +1682,10 @@ let device, uploadWaves, writeAllUniforms;
     const rx0 = -fz0, rz0 = fx0;
     const hF = waveH(b.x + fx0 * 2.2, b.z + fz0 * 2.2, wt), hB = waveH(b.x - fx0 * 2.2, b.z - fz0 * 2.2, wt);
     const hR = waveH(b.x + rx0 * 1.3, b.z + rz0 * 1.3, wt), hL = waveH(b.x - rx0 * 1.3, b.z - rz0 * 1.3, wt);
-    const tp = (hF - hB) / 4.4, tr = (hR - hL) / 2.6;
+    // Clamp pitch/roll to ±18° — the raw wave slope can spike on steep
+    // crests and flip the boat; a level boat is always better than a flipped one.
+    const tp = Math.max(-0.32, Math.min(0.32, (hF - hB) / 4.4));
+    const tr = Math.max(-0.32, Math.min(0.32, (hR - hL) / 2.6));
     let fx = fx0, fy = tp, fz = fz0;
     let rx = rx0, ry = tr, rz = rz0;
     // up = norm(cross(right, fwd)); fwd = cross(up, right)
