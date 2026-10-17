@@ -791,9 +791,14 @@ function fbm2(px, py) {
   }
   return v;
 }
-// JS wave sample: EXACT mirror of the shader's oceanHeightFull
+// JS wave sample: EXACT mirror of the shader's oceanHeightMarch (visible surface)
 // (13 waves + wander + short-crested + group fbm + crest shaping). Returns h.
 function waveH(x, z, t) {
+  // EXACT mirror of the shader's oceanHeightMarch — the RAYMARCHED surface
+  // the user actually sees. Critical: this does NOT include the group
+  // modulation or crest sharpening from oceanHeightFull (those are for
+  // shading only). The boat/buoys must sit on the marched surface, or they
+  // sink/float by up to 30% as the groups drift.
   const sc1 = Math.sin(x * 0.061 + z * 0.043 + t * 0.11);
   const sc2 = Math.sin(-x * 0.052 + z * 0.071 - t * 0.073);
   let h = 0;
@@ -813,15 +818,8 @@ function waveH(x, z, t) {
       f += 0.7 * Math.sin(x * 0.19 + z * 0.11 + i * 1.7 + t * 0.21)
                  * Math.sin(-x * 0.13 + z * 0.17 - t * 0.13 + i * 0.9);
     }
-    h += amp * ampW * Math.sin(f);
+    h += amp * ampW * Math.sin(f);  // fade≈1 near camera; march uses same
   }
-  // wave groups: slow spatial modulation (matches oceanHeightFull)
-  const group = 0.70 + 0.60 * fbm2(x * 0.006 + t * 0.018, z * 0.006 - t * 0.011);
-  h *= group;
-  // crest sharpening: narrower peaks, flatter troughs (matches oceanHeightFull)
-  const cn = Math.max(-1, Math.min(1, h / Math.max(MAXH, 1e-3)));
-  const shaped = Math.sign(cn) * Math.pow(Math.abs(cn), 1.18);
-  h = shaped * MAXH;
   return h;
 }
 function waveGrad(x, z, t) {  // finite-difference gradient + height
@@ -1064,6 +1062,8 @@ function resetEnv(L) {
   env.sunEl = L.sunEl; env.sunAz = 205; env.exposure = L.exposure;
   env.waveScale = L.waveScale; env.foam = L.foam;
   env.timeScale = 1.0; env.fov = 60;
+  env.drift = 1.0; env.grain = 0.014; env.vignette = 0.30;
+  env.camDist = 10.5; env.camH = 4.8;
 }
 // effective value: env override or level default
 function ev(name, L) { return env[name] !== undefined ? env[name] : L[name]; }
@@ -1077,6 +1077,11 @@ const PANEL_DEFS = [
   { key: 'foam', label: 'Foam amount', min: 0, max: 2.5, step: 0.05, fmt: v => v.toFixed(2) },
   { key: 'timeScale', label: 'Time scale', min: 0, max: 2, step: 0.05, fmt: v => v.toFixed(2) + '×' },
   { key: 'fov', label: 'FOV', min: 35, max: 110, step: 1, fmt: v => v.toFixed(0) + '°' },
+  { key: 'drift', label: 'Cam drift', min: 0, max: 3, step: 0.05, fmt: v => v.toFixed(2) },
+  { key: 'grain', label: 'Grain', min: 0, max: 0.05, step: 0.001, fmt: v => v.toFixed(3) },
+  { key: 'vignette', label: 'Vignette', min: 0, max: 0.8, step: 0.01, fmt: v => v.toFixed(2) },
+  { key: 'camDist', label: 'Chase distance', min: 6, max: 20, step: 0.5, fmt: v => v.toFixed(1) + 'm' },
+  { key: 'camH', label: 'Chase height', min: 2, max: 10, step: 0.2, fmt: v => v.toFixed(1) + 'm' },
 ];
 function buildPanel() {
   const body = document.getElementById('pbody');
@@ -1404,16 +1409,20 @@ function buildWakeIndices(vc) {
 const cam = { pos: [0, 8, -14], fwd: [0, -0.2, 1], right: [1, 0, 0], up: [0, 1, 0] };
 function updateCamera(dt, wt) {
   const b = game.boat;
+  const L = LEVELS[game.level];
   const fx = Math.cos(b.h), fz = Math.sin(b.h);
   const spd = Math.hypot(b.vx, b.vz);
-  const dist = 10.5 + spd * 0.14, hgt = 4.8 + spd * 0.03;
+  const dist = ev('camDist', L) + spd * 0.14, hgt = ev('camH', L) + spd * 0.03;
   const wy = waveH(b.x, b.z, wt);
   const dx = b.x - fx * dist, dz = b.z - fz * dist;
+  // ambient camera drift: slow bounded sway so the view breathes
+  const dr = ev('drift', L) * 2.2;
+  const dox = Math.cos(wt * 0.06) * dr, doz = Math.sin(wt * 0.06) * dr;
   const dy = Math.max(wy + hgt, waveH(dx, dz, wt) + 2.4);
   const k = 1 - Math.exp(-4.2 * dt);
-  cam.pos[0] += (dx - cam.pos[0]) * k;
+  cam.pos[0] += (dx + dox - cam.pos[0]) * k;
   cam.pos[1] += (dy - cam.pos[1]) * k;
-  cam.pos[2] += (dz - cam.pos[2]) * k;
+  cam.pos[2] += (dz + doz - cam.pos[2]) * k;
   // shake
   if (game.shake > 0) {
     game.shake = Math.max(0, game.shake - dt * 1.6);
@@ -1774,7 +1783,7 @@ let device, uploadWaves, writeAllUniforms;
     U[28] = tanH; U[29] = w / hgt; U[30] = ev('foam', L); U[31] = MAXH;
     const wa = (ev('sunAz', L) - 12) * Math.PI / 180;
     U[32] = Math.cos(wa); U[33] = Math.sin(wa); U[34] = 1; U[35] = SRGB_OUT ? 1 : 0;
-    U[36] = 0.014; U[37] = 0.30; U[38] = 0; U[39] = 0;
+    U[36] = ev('grain', L); U[37] = ev('vignette', L); U[38] = 0; U[39] = 0;
     device.queue.writeBuffer(uniBuf, 0, U);
     // mesh uniforms
     mat4Look(_view, cam.pos, cam.fwd, cam.right, cam.up);
