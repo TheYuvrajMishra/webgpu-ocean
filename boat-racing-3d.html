@@ -1,0 +1,1813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Buoy Racer 3D — WebGPU</title>
+<style>
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#04070c;
+    font-family:-apple-system,"Segoe UI",Roboto,sans-serif; }
+  #view { display:block; width:100vw; height:100vh; }
+  .hud { position:fixed; z-index:5; color:#fff; user-select:none; pointer-events:none;
+    text-shadow:0 1px 4px rgba(0,0,0,.75); }
+  #hud-tl { left:16px; top:14px; }
+  #speed { font-size:34px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:.02em; }
+  #speed small { font-size:13px; font-weight:400; opacity:.75; }
+  #thrbar { width:130px; height:6px; background:rgba(255,255,255,.18); border-radius:3px; margin-top:6px; overflow:hidden; }
+  #thrfill { height:100%; width:0%; background:linear-gradient(90deg,#37c6ff,#7dff9a); border-radius:3px; }
+  #hud-tc { left:50%; top:12px; transform:translateX(-50%); text-align:center; }
+  #time { font-size:26px; font-weight:600; font-variant-numeric:tabular-nums; }
+  #gateinfo { font-size:13px; opacity:.9; margin-top:2px; letter-spacing:.08em; }
+  #parinfo { font-size:11px; opacity:.65; margin-top:1px; }
+  #minimap { right:16px; top:14px; border:1px solid rgba(255,255,255,.25); border-radius:8px;
+    background:rgba(4,10,16,.55); }
+  #toast { left:50%; top:32%; transform:translateX(-50%); font-size:30px; font-weight:700;
+    letter-spacing:.06em; opacity:0; transition:opacity .25s; text-align:center; white-space:nowrap; }
+  #gatemark { padding:4px 10px; background:rgba(6,20,14,.62); border:1px solid rgba(80,255,150,.65);
+    border-radius:8px; font-size:13px; font-weight:600; color:#c9ffdd; white-space:nowrap;
+    transform:translate(-50%,-50%); }
+  #gatemark .d { opacity:.75; font-weight:400; font-size:11px; }
+  #wrongway { left:50%; top:22%; transform:translateX(-50%); font-size:24px; font-weight:800;
+    color:#ffb3ab; letter-spacing:.1em; display:none; animation:blink .5s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:.35; } }
+  .screen { position:fixed; inset:0; z-index:10; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; text-align:center; color:#fff; background:rgba(3,7,12,.72);
+    backdrop-filter:blur(6px); }
+  .screen.hidden { display:none; }
+  .gtitle { font-size:min(84px,11vw); font-weight:800; letter-spacing:.04em; margin:0;
+    background:linear-gradient(180deg,#fff,#9fd8ff 60%,#3d9bd6); -webkit-background-clip:text;
+    background-clip:text; color:transparent; text-shadow:0 4px 30px rgba(60,160,255,.25); }
+  .gsub { font-size:15px; opacity:.8; letter-spacing:.28em; margin:6px 0 26px; }
+  .btn { pointer-events:auto; cursor:pointer; margin-top:26px; padding:13px 44px; font-size:18px;
+    font-weight:700; letter-spacing:.08em; color:#04121c; background:linear-gradient(180deg,#9fe8ff,#4fb7ec);
+    border:none; border-radius:12px; box-shadow:0 6px 24px rgba(80,180,255,.35); }
+  .btn:hover { filter:brightness(1.1); }
+  .ctl { font-size:13px; opacity:.75; line-height:2; margin-top:18px; }
+  .ctl b { color:#9fe8ff; }
+  .big { font-size:min(120px,18vw); font-weight:800; color:#fff; text-shadow:0 6px 40px rgba(0,0,0,.6); }
+  .card { background:rgba(8,16,24,.85); border:1px solid rgba(255,255,255,.14); border-radius:16px;
+    padding:30px 46px; }
+  .card h2 { margin:0 0 8px; font-size:34px; letter-spacing:.05em; }
+  .stars { font-size:40px; color:#ffd75e; letter-spacing:.15em; margin:8px 0; text-shadow:0 2px 12px rgba(255,180,40,.4); }
+  .row { font-size:15px; opacity:.85; margin:4px 0; font-variant-numeric:tabular-nums; }
+  #nogl { display:none; position:fixed; inset:0; z-index:20; align-items:center; justify-content:center;
+    text-align:center; background:#04070c; color:#cfd8e3; font-size:15px; line-height:1.7; padding:40px; }
+  #nogl.show { display:flex; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div class="hud" id="hud-tl"><div id="speed">0<small> kn</small></div><div id="thrbar"><div id="thrfill"></div></div></div>
+<div class="hud" id="hud-tc"><div id="time">0:00.0</div><div id="gateinfo">GATE 0/0</div><div id="parinfo">PAR 0:00</div></div>
+<canvas class="hud" id="minimap" width="150" height="150"></canvas>
+<div class="hud" id="toast"></div>
+<div class="hud" id="gatemark" style="display:none">GATE <span id="gmn">1</span> <span class="d" id="gmd"></span></div>
+<div class="hud" id="wrongway">⚠ WRONG WAY</div>
+
+<div class="screen" id="s-title">
+  <h1 class="gtitle">BUOY RACER 3D</h1>
+  <div class="gsub">WEBGPU OPEN-WATER SLALOM</div>
+  <button class="btn" id="b-start">CLICK TO RACE</button>
+  <div class="ctl"><b>W A S D</b> / arrows — throttle · brake · steer &nbsp;·&nbsp; <b>P</b> pause &nbsp;·&nbsp; <b>M</b> mute<br>
+  Thread the red/white buoy gates in order. Beat par for ★★★.</div>
+</div>
+<div class="screen hidden" id="s-count"><div class="big" id="countnum">3</div></div>
+<div class="screen hidden" id="s-level"><div class="card">
+  <h2 id="lv-title">LEVEL COMPLETE</h2><div class="stars" id="lv-stars">★★★</div>
+  <div class="row" id="lv-time">Time 0:00.0</div><div class="row" id="lv-best"></div>
+  <button class="btn" id="b-next">NEXT LEVEL →</button>
+</div></div>
+<div class="screen hidden" id="s-over"><div class="card">
+  <h2>TIME UP</h2><div class="row">You missed the limit. The sea shows no mercy.</div>
+  <button class="btn" id="b-retry">RETRY LEVEL</button>
+</div></div>
+<div class="screen hidden" id="s-camp"><div class="card">
+  <h2 id="camp-title">CHAMPION!</h2><div class="stars" id="camp-stars">★★★★★★★★★★★★</div>
+  <div class="row" id="camp-time">Total 0:00.0</div>
+  <button class="btn" id="b-again">RACE AGAIN</button>
+</div></div>
+<div class="screen hidden" id="s-pause"><div class="card"><h2>PAUSED</h2>
+  <div class="row">Press P to resume</div></div></div>
+<div id="nogl"><div><div style="font-size:22px;margin-bottom:12px;color:#fff">WebGPU is not available</div>
+  This game needs Chrome/Edge 113+ with WebGPU.<br>In headless: <code>--enable-unsafe-webgpu --use-angle=swiftshader</code></div></div>
+<script>
+"use strict";
+/* =====================================================================
+   BUOY RACER 3D — WebGPU open-water slalom.
+   Single file, zero deps. Ocean renderer core shares its wave model
+   with the game physics so the boat rides the rendered swell.
+   ===================================================================== */
+
+const q = new URLSearchParams(location.search);
+const FREEZE_T = q.has('t') ? parseFloat(q.get('t')) : null;
+const FORCE_W  = q.has('w') ? parseInt(q.get('w')) : 0;
+const FORCE_H  = q.has('h') ? parseInt(q.get('h')) : 0;
+const FORCE_DPR = q.has('dpr') ? parseFloat(q.get('dpr')) : 0;
+const READBACK = q.has('readback');
+const START_LEVEL = q.has('level') ? Math.max(0, parseInt(q.get('level'))) : 0;
+const AUTODRIVE = q.has('autodrive');
+if (READBACK) { document.getElementById('minimap').style.display = 'none'; }
+
+const OCEAN_WGSL = `
+struct U {
+  time: f32, resX: f32, resY: f32, exposure: f32,
+  camPos: vec3f, _p0: f32,
+  camFwd: vec3f, _p1: f32,
+  camRight: vec3f, _p2: f32,
+  camUp: vec3f, _p3: f32,
+  sunDir: vec3f, _p4: f32,
+  sunColor: vec3f, grainSeed: f32,
+  tanHalfFov: f32, aspect: f32, foamAmt: f32, maxH: f32,
+  windX: f32, windZ: f32, sprayOn: f32, srgbOut: f32,
+  grainAmt: f32, vignetteAmt: f32, _p5: f32, _p6: f32,
+};
+struct Wave { dir: vec2f, k: f32, amp: f32, omega: f32, phase: f32, steep: f32, _pad: f32 };
+struct Part { pos: vec3f, size: f32, alpha: f32, seed: f32, _pa: f32, _pb: f32 };
+
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var<storage, read> waves: array<Wave>;
+@group(0) @binding(2) var<storage, read> parts: array<Part>;
+
+const PI: f32 = 3.14159265359;
+const NW: u32 = 13u;
+
+/* ---------- hashes & noise ---------- */
+fn hash12(p: vec2f) -> f32 {
+  var p3 = fract(vec3f(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p);
+  let w = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // quintic
+  let a = hash12(i); let b = hash12(i + vec2f(1.0, 0.0));
+  let c = hash12(i + vec2f(0.0, 1.0)); let d = hash12(i + vec2f(1.0, 1.0));
+  return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+}
+fn fbm(p: vec2f) -> f32 {
+  var v: f32 = 0.0; var a: f32 = 0.5;
+  var q: vec2f = p;
+  for (var i: u32 = 0u; i < 4u; i++) { v += a * vnoise(q); q = q * 2.03 + vec2f(17.3, 9.1); a *= 0.5; }
+  return v;
+}
+// PCG integer hash: structure-free white noise for grain/dither
+fn pcg2d(p: vec2i) -> f32 {
+  var v = u32(p.x) * 1664525u + u32(p.y) * 1013904223u + 0x9e3779b9u;
+  v ^= v >> 15u; v *= 0x85ebca6bu; v ^= v >> 13u; v *= 0xc2b2ae35u; v ^= v >> 16u;
+  return f32(v) * (1.0 / 4294967295.0);
+}
+
+/* ---------- ocean heightfield ---------- */
+// Cheap version for the raymarch loop (plain sine sum; groups/shaping are
+// cm-scale and only applied in the shading evaluation below).
+fn oceanHeightMarch(p: vec2f, t: f32, dist: f32) -> f32 {
+  var h: f32 = 0.0;
+  // short-crested modulation for the wind-sea components (indices >= 5):
+  // breaks the endless parallel lines into natural crest segments
+  let sc1 = sin(dot(p, vec2f(0.061, 0.043)) + t * 0.11);
+  let sc2 = sin(dot(p, vec2f(-0.052, 0.071)) - t * 0.073);
+  for (var i: u32 = 0u; i < NW; i++) {
+    let w = waves[i];
+    let kd = w.k * dist / 700.0;
+    let fade = 1.0 / (1.0 + kd * kd);
+    var amp = w.amp;
+    if (i >= 5u) {
+      let sci = 0.82 + 0.18 * sc1 * sc2
+              * sin(f32(i) * 2.39) * sin(f32(i) * 1.31 + 0.7);
+      amp *= clamp(sci, 0.65, 1.0);
+    }
+    // slow sea-state evolution: incommensurate breathing of amplitude and
+    // phase so the wave field never visibly repeats
+    let wob = f32(i) + 1.0;
+    let ampW = 1.0 + 0.30 * sin(t * 0.023 * wob + f32(i) * 2.39)
+                         * sin(t * 0.011 * (wob + 1.0) + f32(i) * 1.71);
+    var f = w.k * dot(w.dir, p) - w.omega * t + w.phase
+          + 0.9 * sin(t * 0.019 * wob + f32(i) * 4.13);
+    if (i >= 5u) {
+      f += 0.7 * sin(dot(p, vec2f(0.19, 0.11)) + f32(i) * 1.7 + t * 0.21)
+              * sin(dot(p, vec2f(-0.13, 0.17)) - t * 0.13 + f32(i) * 0.9);
+    }
+    h += amp * fade * ampW * sin(f);
+  }
+  return h;
+}
+// Full version for shading: height + crest factor + chop, with wave-group
+// modulation (low-freq fbm swells/ebbs the whole field) and crest sharpening.
+fn oceanHeightFull(p: vec2f, t: f32, dist: f32) -> vec3f {
+  var h: f32 = 0.0; var chop: f32 = 0.0; var chopN: f32 = 0.0;
+  let sc1 = sin(dot(p, vec2f(0.061, 0.043)) + t * 0.11);
+  let sc2 = sin(dot(p, vec2f(-0.052, 0.071)) - t * 0.073);
+  for (var i: u32 = 0u; i < NW; i++) {
+    let w = waves[i];
+    let kd = w.k * dist / 700.0;
+    let fade = 1.0 / (1.0 + kd * kd);
+    var amp = w.amp;
+    if (i >= 5u) {
+      let sci = 0.82 + 0.18 * sc1 * sc2
+              * sin(f32(i) * 2.39) * sin(f32(i) * 1.31 + 0.7);
+      amp *= clamp(sci, 0.65, 1.0);
+    }
+    // slow sea-state evolution: incommensurate breathing of amplitude and
+    // phase so the wave field never visibly repeats
+    let wob = f32(i) + 1.0;
+    let ampW = 1.0 + 0.30 * sin(t * 0.023 * wob + f32(i) * 2.39)
+                         * sin(t * 0.011 * (wob + 1.0) + f32(i) * 1.71);
+    var f = w.k * dot(w.dir, p) - w.omega * t + w.phase
+          + 0.9 * sin(t * 0.019 * wob + f32(i) * 4.13);
+    if (i >= 5u) {
+      f += 0.7 * sin(dot(p, vec2f(0.19, 0.11)) + f32(i) * 1.7 + t * 0.21)
+              * sin(dot(p, vec2f(-0.13, 0.17)) - t * 0.13 + f32(i) * 0.9);
+    }
+    h += amp * fade * ampW * sin(f);
+    chop += w.steep * fade * ampW * cos(f); chopN += w.steep * fade;
+  }
+  // wave groups: slow spatial modulation of the whole sea state
+  let group = 0.70 + 0.60 * fbm(p * 0.006 + vec2f(t * 0.018, -t * 0.011));
+  h *= group;
+  // crest sharpening: narrower peaks, flatter troughs
+  let cn = clamp(h / max(u.maxH, 1e-3), -1.0, 1.0);
+  let shaped = sign(cn) * pow(abs(cn), 1.18);
+  h = shaped * u.maxH;
+  // crest factor normalized by a realistic large crest (2.5m), not the
+  // theoretical MAXH sum (which never occurs and would suppress foam)
+  let crest = clamp(h / 2.5, 0.0, 1.0);
+  return vec3f(h, crest, chop / max(chopN, 1e-4));
+}
+fn oceanHeight(p: vec2f, t: f32, dist: f32, detailFade: f32) -> f32 {
+  return oceanHeightMarch(p, t, dist);
+}
+fn oceanNormal(p: vec2f, t: f32, dist: f32) -> vec3f {
+  var gx: f32 = 0.0; var gz: f32 = 0.0;
+  let sc1 = sin(dot(p, vec2f(0.061, 0.043)) + t * 0.11);
+  let sc2 = sin(dot(p, vec2f(-0.052, 0.071)) - t * 0.073);
+  for (var i: u32 = 0u; i < NW; i++) {
+    let w = waves[i];
+    let kd = w.k * dist / 700.0;
+    let fade = 1.0 / (1.0 + kd * kd);
+    var amp = w.amp;
+    if (i >= 5u) {
+      let sci = 0.82 + 0.18 * sc1 * sc2
+              * sin(f32(i) * 2.39) * sin(f32(i) * 1.31 + 0.7);
+      amp *= clamp(sci, 0.65, 1.0);
+    }
+    // slow sea-state evolution: incommensurate breathing of amplitude and
+    // phase so the wave field never visibly repeats
+    let wob = f32(i) + 1.0;
+    let ampW = 1.0 + 0.30 * sin(t * 0.023 * wob + f32(i) * 2.39)
+                         * sin(t * 0.011 * (wob + 1.0) + f32(i) * 1.71);
+    var f = w.k * dot(w.dir, p) - w.omega * t + w.phase
+          + 0.9 * sin(t * 0.019 * wob + f32(i) * 4.13);
+    if (i >= 5u) {
+      f += 0.7 * sin(dot(p, vec2f(0.19, 0.11)) + f32(i) * 1.7 + t * 0.21)
+              * sin(dot(p, vec2f(-0.13, 0.17)) - t * 0.13 + f32(i) * 0.9);
+    }
+    let d = amp * w.k * fade * ampW * cos(f);
+    gx += w.dir.x * d; gz += w.dir.y * d;
+  }
+  // organic fine detail from noise gradients (2 octaves) — no directional bias,
+  // so the near field reads as water texture, not pond ripples
+  let df = exp(-dist / 10.0);
+  if (df > 0.01) {
+    let e1: f32 = 0.09;
+    let t1 = t * 0.6;
+    let o1 = vec2f(t1, -t1 * 0.7);
+    let b0 = vnoise(p * 6.0 + o1);
+    let bx = vnoise((p + vec2f(e1, 0.0)) * 6.0 + o1);
+    let bz = vnoise((p + vec2f(0.0, e1)) * 6.0 + o1);
+    gx += (bx - b0) / e1 * 0.030 * df;
+    gz += (bz - b0) / e1 * 0.030 * df;
+    let e2: f32 = 0.045;
+    let t2 = t * 0.9;
+    let o2 = vec2f(-t2 * 0.8, t2);
+    let c0 = vnoise(p * 13.0 + o2);
+    let cx = vnoise((p + vec2f(e2, 0.0)) * 13.0 + o2);
+    let cz = vnoise((p + vec2f(0.0, e2)) * 13.0 + o2);
+    gx += (cx - c0) / e2 * 0.012 * df;
+    gz += (cz - c0) / e2 * 0.012 * df;
+  }
+  return normalize(vec3f(-gx, 1.0, -gz));
+}
+
+/* ---------- sky: Rayleigh + Mie single scatter ---------- */
+fn skyColor(rd: vec3f) -> vec3f {
+  let sunDir = u.sunDir;
+  let Rg: f32 = 6360e3; let Rt: f32 = 6420e3;
+  let Hr: f32 = 7994.0; let Hm: f32 = 1200.0;
+  let betaR: vec3f = vec3f(6.3e-6, 15.0e-6, 25.8e-6);
+  let betaM: f32 = 8.0e-6;
+  let sunI: f32 = 10.0;
+
+  let ro = vec3f(0.0, Rg + max(u.camPos.y, 0.5), 0.0);
+  let b = dot(ro, rd);
+  let c = dot(ro, ro) - Rt * Rt;
+  let disc = b * b - c;
+  if (disc < 0.0) { return vec3f(0.0); }
+  let tMax = -b + sqrt(disc);
+  if (tMax <= 0.0) { return vec3f(0.0); }
+
+  let mu = dot(rd, sunDir);
+  let phaseR = 3.0 / (16.0 * PI) * (1.0 + mu * mu);
+  let gg: f32 = 0.83;
+  let phaseM = (1.0 - gg * gg) / (4.0 * PI * pow(max(1.0 + gg * gg - 2.0 * gg * mu, 1e-4), 1.5));
+
+  var sumR = vec3f(0.0); var sumM: f32 = 0.0;
+  var odR: f32 = 0.0; var odM: f32 = 0.0;
+  let NS: u32 = 20u;
+  let dt = tMax / f32(NS);
+  for (var i: u32 = 0u; i < NS; i++) {
+    let tt = (f32(i) + 0.5) * dt;
+    let p = ro + rd * tt;
+    let h = max(length(p) - Rg, 0.0);
+    let dR = exp(-h / Hr) * dt;
+    let dM = exp(-h / Hm) * dt;
+    odR += dR; odM += dM;
+    // optical depth from sample point toward the sun (scale-height approx)
+    let cosSun = dot(p / max(length(p), 1e-3), sunDir);
+    let sDenom = max(cosSun, 0.03);
+    let odSunR = exp(-h / Hr) * Hr / sDenom;
+    let odSunM = exp(-h / Hm) * Hm / sDenom;
+    let tau = betaR * (odR + odSunR) + vec3f(betaM) * (odM + odSunM);
+    let attn = exp(-tau);
+    sumR += attn * dR;
+    sumM += dot(attn, vec3f(0.3333333)) * dM;
+  }
+  var col = (sumR * betaR * phaseR + vec3f(betaM) * sumM * phaseM) * sunI;
+
+  // approximate multiple scattering: lifts the murky single-scatter brown
+  // that appears at the horizon away from the sun
+  // uniform horizon wash: guarantees a smooth strip with no terminator line
+  let horizF = pow(clamp(1.0 - abs(rd.y) * 4.5, 0.0, 1.0), 3.0);
+  let warmF = clamp(mu * 0.5 + 0.5, 0.0, 1.0);
+  let ambCol = mix(vec3f(0.42, 0.52, 0.62), vec3f(0.75, 0.62, 0.48), warmF * warmF);
+  col = mix(col, ambCol * (0.50 + 0.90 * warmF), horizF * 0.60);
+
+  // sun disk with limb darkening + tight warm corona
+  let cosSunR: f32 = 0.9999733;                       // ~0.42 deg radius
+  let disk = smoothstep(0.9999728, 0.9999733, mu);     // hard limb
+  let limb = 0.55 + 0.45 * pow(clamp((mu - 0.9999715) / (cosSunR - 0.9999715), 0.0, 1.0), 0.5);
+  col += u.sunColor * (38.0 * disk * limb);
+  col += u.sunColor * pow(max(mu, 0.0), 3500.0) * 2.2;
+  return col;
+}
+
+/* ---------- ocean raymarch ---------- */
+// returns (t, hitFlag): 0 = miss, 1 = surface hit, 2 = far flat-plane fallback
+fn traceOcean(ro: vec3f, rd: vec3f, t: f32) -> vec2f {
+  var tt: f32 = 0.5;
+  var tPrev: f32 = 0.5;
+  let tMax: f32 = 650.0;
+  var hit: f32 = 0.0;
+  for (var i: u32 = 0u; i < 70u; i++) {
+    let p = ro + rd * tt;
+    let h = oceanHeight(p.xz, t, tt, 0.0);
+    let d = p.y - h;
+    if (d < 0.012 * tt + 0.008) { hit = 1.0; break; }
+    tPrev = tt;
+    tt += max(d * 0.58, 0.02 + tt * 0.012);
+    if (tt > tMax) { break; }
+  }
+  if (hit > 0.5) {
+    var a = tPrev; var bb = tt;   // binary refinement
+    for (var j: u32 = 0u; j < 5u; j++) {
+      let m = (a + bb) * 0.5;
+      let p = ro + rd * m;
+      if (p.y - oceanHeight(p.xz, t, m, 0.0) > 0.0) { a = m; } else { bb = m; }
+    }
+    tt = (a + bb) * 0.5;
+  } else if (rd.y < -1e-4) {
+    let tp = -ro.y / rd.y;
+    if (tp > 0.0 && tp < 4000.0) { tt = tp; hit = 2.0; }
+  }
+  return vec2f(tt, hit);
+}
+
+/* ---------- water shading ---------- */
+// farF: 0 = full raymarched detail, 1 = analytic flat far field (blended by
+// distance so the horizon never shows a march hit/miss seam)
+fn shadeWater(ro: vec3f, rd: vec3f, t: f32, tt: f32, farF: f32) -> vec3f {
+  let p = ro + rd * tt;
+  let sunDir = u.sunDir;
+  let V = -rd;
+
+  var n: vec3f;
+  var crest: f32; var chop: f32; var h: f32;
+  {
+    let hf = oceanHeightFull(p.xz, t, tt);
+    h = hf.x; crest = hf.y; chop = hf.z;
+    n = oceanNormal(p.xz, t, tt);
+    // perturb with a touch of fbm for organic micro variation
+    let jf = exp(-tt / 12.0);
+    let jx = (fbm(p.xz * 2.7 + vec2f(t * 0.35, 0.0)) - 0.5) * 0.22 * jf;
+    let jz = (fbm(p.xz * 2.7 + vec2f(0.0, t * 0.30) + 7.0) - 0.5) * 0.22 * jf;
+    n = normalize(n + vec3f(jx, 0.0, jz));
+  }
+  // blend toward the analytic flat far field with distance
+  if (farF > 0.001) {
+    let frx = 0.055 * sin(p.x * 0.11 + t * 0.5) + 0.035 * sin(p.z * 0.13 - t * 0.4)
+            + 0.020 * sin(p.x * 0.31 - p.z * 0.23 + t * 0.8);
+    let frz = 0.055 * cos(p.z * 0.09 - t * 0.45) + 0.035 * cos(p.x * 0.12 + t * 0.35)
+            + 0.020 * cos(p.z * 0.27 + p.x * 0.19 - t * 0.7);
+    n = normalize(mix(n, vec3f(frx, 1.0, frz), farF));
+    crest *= 1.0 - farF; chop *= 1.0 - farF;
+  }
+
+  let ndv = max(dot(n, V), 0.0);
+  let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+
+  var R = reflect(rd, n);
+  R.y = abs(R.y) + 1e-4;
+  let refl = skyColor(normalize(R));
+
+  // sun glitter: sparse discrete sparkles with dark water between them,
+  // plus a very restrained broad sheen
+  let g = max(dot(normalize(R), sunDir), 0.0);
+  let sp = pow(vnoise(p.xz * 23.0 + vec2f(-t * 1.1, t * 0.8)), 14.0);
+  let farGlit = 1.0 - smoothstep(120.0, 350.0, tt) * 0.60;
+  let glitter = (pow(g, 1100.0) * sp * 30.0 + pow(g, 300.0) * 0.10) * u.sunColor * farGlit;
+
+  // water body: blue-green absorption with distance, darker at grazing
+  let absorb = exp(-tt * vec3f(0.32, 0.14, 0.085));
+  let sssW = pow(clamp(dot(n, sunDir) * 0.5 + 0.5, 0.0, 1.0), 3.0);
+  var body = mix(vec3f(0.008, 0.072, 0.072), vec3f(0.030, 0.165, 0.130), sssW * clamp(crest * 1.6, 0.0, 1.0));
+  body *= (0.35 + 0.65 * absorb);
+  // subsurface glow through thin sun-facing flanks
+  let sss = sssW * smoothstep(0.25, 0.95, crest) * u.sunColor * 0.55;
+
+  /* ----- foam mask: matte whitecaps, true crests only -----
+     Domain-warped breakup advected downwind and sampled at a retarded
+     position (foam trails behind moving crests); bubble-fizz breakup and
+     eroded edges so it never reads as a flat decal. The mask also kills
+     the wet glitter inside foam — foam is diffuse, not specular.        */
+  let wind = normalize(vec2f(u.windX, u.windZ));
+  let wperp = vec2f(-wind.y, wind.x);
+  let fp = p.xz;
+  let adv  = fp - wind * t * 0.9;            // foam drifts downwind...
+  let adv2 = fp - wind * (t * 0.9 + 1.6);     // ...and lingers where crests were
+  let warp = vec2f(fbm(adv * 0.22 + vec2f(0.0, t * 0.05)),
+                   fbm(adv * 0.22 + vec2f(5.2, -t * 0.04))) - 0.5;
+  let bn   = fbm(adv * 0.55 + warp * 2.2);
+  let bn2  = fbm(adv2 * 0.55 + warp * 2.2);
+  let breakup = max(bn, bn2 * 0.72);                       // trailing foam
+  let streakN = fbm(vec2f(dot(adv, wind) * 0.07 - t * 0.22, dot(adv, wperp) * 0.33));
+  // bubble fizz: high-frequency breakup so foam reads as bubbles, not paint
+  let bub  = vnoise(fp * 43.0 + vec2f(t * 0.9, -t * 0.7));
+  let bub2 = vnoise(fp * 91.0 + vec2f(-t * 1.3, t * 1.1));
+  let fizz = bub * 0.6 + bub2 * 0.4;
+  // whitecap drive: crest height + crest sharpness (chop) — the original
+  // proven drive; chop fires on steep breaking crests, height gates the rest
+  let drive = clamp(crest * 0.65 + chop * 0.35, 0.0, 1.2);
+  var foamM = smoothstep(0.30, 0.55, drive);
+  // breakup gates shape the foam but pass ~1 in patch cores (they punch
+  // holes via the fizz/edge terms instead of dimming everything)
+  foamM *= smoothstep(0.22, 0.42, breakup * 0.72 + streakN * 0.28);
+  foamM *= smoothstep(0.18, 0.42, fizz);
+  // scattered wind-blown patches, still crest-gated
+  let patchN = fbm(adv * 0.045 + vec2f(t * 0.012, -t * 0.008));
+  let patchF = smoothstep(0.62, 0.74, patchN) * smoothstep(0.45, 0.62, crest)
+             * smoothstep(0.35, 0.60, bn) * smoothstep(0.18, 0.42, fizz);
+  foamM = clamp(foamM + patchF * 0.8, 0.0, 1.0);
+  // erode the edges with fine detail
+  let edge = fbm(fp * 2.6 + vec2f(-t * 0.5, t * 0.35));
+  foamM *= mix(0.55, 1.0, smoothstep(0.15, 0.75, edge + foamM * 0.55));
+  foamM *= u.foamAmt;
+  foamM = clamp(foamM, 0.0, 1.0);
+
+  var col = mix(body, refl, fres) + sss;
+  col += glitter * (1.0 - foamM);   // foam is diffuse: no wet glints inside it
+  if (foamM > 0.003 && farF < 0.5) {
+    // chalky matte white: flat diffuse + sky ambient, zero specular
+    let fmn = normalize(n + vec3f((bn - 0.5) * 0.9 + (edge - 0.5) * 0.5, 0.0,
+                                  (streakN - 0.5) * 0.9 + (edge - 0.5) * 0.5));
+    let diff = clamp(dot(fmn, sunDir) * 0.5 + 0.5, 0.0, 1.0);
+    var foamCol = mix(vec3f(0.88, 0.91, 0.93), vec3f(1.07, 1.08, 1.06),
+                      smoothstep(0.05, 0.70, foamM));
+    foamCol *= 0.45 + 0.75 * diff;
+    foamCol += refl * 0.10;                                   // faint sky pickup
+    col = mix(col, foamCol, foamM);
+  }
+
+  // faint wind-blown spray streaks riding the crests (in-shader)
+  let sprayStreak = smoothstep(0.78, 0.97, streakN) * smoothstep(0.45, 0.8, crest) * 0.10;
+  col += u.sunColor * sprayStreak * (0.4 + 0.6 * sssW);
+
+  // distance haze toward horizon sky color (always on; ~0 up close)
+  {
+    let hz = skyColor(normalize(vec3f(rd.x, 0.02, rd.z)));
+    let f2 = 1.0 - exp(-max(tt - 30.0, 0.0) / 250.0);
+    col = mix(col, hz, clamp(f2, 0.0, 1.0) * 0.95);
+  }
+  return col;
+}
+
+/* ---------- post ---------- */
+fn aces(x: vec3f) -> vec3f {   // Stephen Hill fit
+  let a: f32 = 2.51; let b: f32 = 0.03; let c: f32 = 2.43; let d: f32 = 0.59; let e: f32 = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3f(0.0), vec3f(1.0));
+}
+
+struct FragOut {
+  @location(0) color: vec4f,
+  @builtin(frag_depth) depth: f32,
+};
+
+@vertex fn vsMain(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+  var pts = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  return vec4f(pts[vi], 0.0, 1.0);
+}
+
+@fragment fn fsMain(@builtin(position) px: vec4f) -> FragOut {
+  // note: @builtin(position).y = 0 is the TOP row (WebGPU viewport flip)
+  let uv2 = vec2f((px.x / u.resX) * 2.0 - 1.0, 1.0 - (px.y / u.resY) * 2.0);
+  let ndc = vec2f(uv2.x * u.aspect, uv2.y);
+  let rd = normalize(u.camFwd + ndc.x * u.tanHalfFov * u.camRight + ndc.y * u.tanHalfFov * u.camUp);
+
+  var col: vec3f;
+  var vdepth: f32;
+  if (rd.y > -0.002) {
+    col = skyColor(rd);
+    vdepth = 1.0;
+  } else {
+    let tr = traceOcean(u.camPos, rd, u.time);
+    // analytic flat-plane distance; blend marched -> flat with distance so
+    // the horizon never shows a raymarch hit/miss seam
+    let tFlat = -u.camPos.y / rd.y;
+    var tUse: f32; var farF: f32;
+    if (tr.y < 0.5 || tFlat < 0.0) {
+      tUse = max(tFlat, 0.0); farF = 1.0;
+    } else {
+      // NOTE: farF is driven by the analytic tFlat (perfectly smooth across
+      // pixels); driving it by the marched tr.x produced terracing stripes
+      farF = smoothstep(250.0, 600.0, tFlat);
+      tUse = mix(tr.x, tFlat, farF);
+    }
+    col = shadeWater(u.camPos, rd, u.time, tUse, farF);
+    let vd = tUse * dot(rd, u.camFwd);
+    vdepth = vd / (vd + 200.0);
+  }
+
+  if (u._p5 > 0.5) {   // debug views
+    if (u._p5 < 1.5) { col = vec3f(rd.x * 0.5 + 0.5, rd.y * 0.5 + 0.5, 0.25); }
+    else if (u._p5 < 2.5) { col = skyColor(rd) * 0.05; }
+    else if (u._p5 < 3.5) { col = vec3f(traceOcean(u.camPos, rd, u.time).x / 420.0); }
+    else { col = vec3f(0.5); }
+    vdepth = 1.0;
+  }
+
+  /* post */
+  col *= u.exposure;
+  col = aces(col);
+  // slight photographic saturation lift
+  let luma = dot(col, vec3f(0.2126, 0.7152, 0.0722));
+  col = mix(vec3f(luma), col, 1.07);
+  // vignette
+  let vg = 1.0 - u.vignetteAmt * pow(length(ndc * vec2f(0.72, 0.72)), 2.6);
+  col *= clamp(vg, 0.0, 1.0);
+  // grain + dither (kills banding) — animated structure-free white noise
+  let seedI = i32(fract(u.grainSeed) * 977.0);
+  let gpx = vec2i(px.xy);
+  col += (pcg2d(gpx + seedI) - 0.5) * u.grainAmt;
+  col += (pcg2d(gpx + seedI + 31) - 0.5) * (1.0 / 255.0);
+
+  var out: FragOut;
+  if (u.srgbOut > 0.5) {
+    out.color = vec4f(col, 1.0);          // canvas is sRGB: hardware converts
+  } else {
+    out.color = vec4f(pow(clamp(col, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2)), 1.0);
+  }
+  out.depth = vdepth;
+  return out;
+}
+
+/* ---------- spray particles (instanced billboards) ---------- */
+struct VOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+  @location(1) alpha: f32,
+  @location(2) seed: f32,
+};
+@vertex fn vsSpray(@builtin(instance_index) ii: u32, @location(0) q: vec2f) -> VOut {
+  let p = parts[ii];
+  let wp = p.pos + (u.camRight * q.x * 1.30 + u.camUp * q.y * 0.80) * p.size;
+  let v = wp - u.camPos;
+  let z = max(dot(v, u.camFwd), 0.05);
+  let x = dot(v, u.camRight) / (z * u.tanHalfFov * u.aspect);
+  let y = dot(v, u.camUp) / (z * u.tanHalfFov);
+  var o: VOut;
+  o.pos = vec4f(x, y, z / (z + 200.0), 1.0);
+  o.uv = q;
+  o.alpha = p.alpha * smoothstep(1.5, 5.0, z);   // fade when too close
+  o.seed = p.seed;
+  return o;
+}
+@fragment fn fsSpray(in: VOut) -> @location(0) vec4f {
+  let r = length(in.uv * vec2f(0.80, 1.15));   // wind-stretched wisps
+  let shape = 1.0 - smoothstep(0.25, 1.0, r);
+  let brk = vnoise(in.uv * 3.4 + in.seed * 23.7 + vec2f(u.time * 0.7, -u.time * 0.5));
+  let brk2 = vnoise(in.uv * 7.0 - in.seed * 11.3);
+  let a = shape * (1.0 - smoothstep(0.25, 0.75, brk * 0.6 + brk2 * 0.4)) * in.alpha * 0.32;
+  if (a < 0.004) { discard; }
+  var col = mix(vec3f(0.72, 0.80, 0.85), vec3f(1.0, 0.94, 0.82), 0.30);
+  return vec4f(col * a, a);             // premultiplied-ish
+}
+`;
+const MESH_WGSL = `/* ============ meshes: boat, buoys (opaque) + wake, beacons (blended fx) ============ */
+struct MU {
+  vp: mat4x4<f32>,
+  camPos: vec3f, _p0: f32,
+  camFwd: vec3f, _p1: f32,
+  sunDir: vec3f, _p2: f32,
+  sunCol: vec3f, _p3: f32,
+  fogCol: vec3f, fogK: f32,
+  exposure: f32, time: f32, _p4: f32, _p5: f32,
+};
+@group(0) @binding(0) var<uniform> mu: MU;
+
+struct VIn {
+  @location(0) pos: vec3f,
+  @location(1) col: vec3f,
+};
+struct VOut {
+  @builtin(position) clip: vec4f,
+  @location(0) wpos: vec3f,
+  @location(1) col: vec3f,
+  @location(2) vdepth: f32,
+};
+struct FragOut2 {
+  @location(0) color: vec4f,
+  @builtin(frag_depth) depth: f32,
+};
+@vertex fn vsMesh(in: VIn) -> VOut {
+  var o: VOut;
+  o.clip = mu.vp * vec4f(in.pos, 1.0);
+  o.wpos = in.pos;
+  o.col = in.col;
+  o.vdepth = dot(in.pos - mu.camPos, mu.camFwd);
+  return o;
+}
+
+fn acesM(x: vec3f) -> vec3f {   // Stephen Hill fit (matches ocean grading)
+  let a: f32 = 2.51; let b: f32 = 0.03; let c: f32 = 2.43; let d: f32 = 0.59; let e: f32 = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3f(0.0), vec3f(1.0));
+}
+
+@fragment fn fsMesh(in: VOut) -> FragOut2 {
+  // flat-shaded normal from screen-space derivatives
+  let fx = dpdx(in.wpos);
+  let fy = dpdy(in.wpos);
+  var N = normalize(cross(fx, fy));
+  // ensure normal faces the camera (out of the surface toward viewer)
+  let V0 = normalize(mu.camPos - in.wpos);
+  if (dot(N, V0) < 0.0) { N = -N; }
+  let L = normalize(mu.sunDir);
+  let V = V0;
+  let dif = max(dot(N, L), 0.0);
+  let H = normalize(L + V);
+  let spec = pow(max(dot(N, H), 0.0), 70.0) * 0.55;
+  let amb = 0.62 + 0.38 * clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+  var col = in.col * (amb + mu.sunCol * dif) + mu.sunCol * spec;
+  // distance fog toward horizon color
+  let d = distance(mu.camPos, in.wpos);
+  let f = 1.0 - exp(-d * mu.fogK);
+  col = mix(col, mu.fogCol, clamp(f, 0.0, 1.0));
+  // match ocean post: exposure + ACES
+  col *= mu.exposure;
+  col = acesM(col);
+  var out: FragOut2;
+  out.color = vec4f(col, 1.0);
+  out.depth = in.vdepth / (in.vdepth + 200.0);
+  return out;
+}
+/* ---- fx: wake ribbon + gate beacons (transparent, unlit) ---- */
+@fragment fn fsFx(in: VOut) -> FragOut2 {
+  var col = in.col;
+  let d = distance(mu.camPos, in.wpos);
+  let f = 1.0 - exp(-d * mu.fogK * 2.0);
+  col = mix(col, mu.fogCol * 0.0, clamp(f, 0.0, 1.0)); // additive: fade to black
+  col *= mu.exposure;
+  col = acesM(col);
+  var out: FragOut2;
+  out.color = vec4f(col, 1.0);
+  out.depth = in.vdepth / (in.vdepth + 200.0);
+  return out;
+}
+`;
+
+/* ---------------- levels ---------------- */
+const LEVELS = [
+  { name: 'CALM BAY',  gates: 5, waveScale: 0.70, sunEl: 34, exposure: 1.06, foam: 0.8,
+    current: [0.0, 0.0], gust: 0.0, gateW: 15, stepLen: 95,  fog: [0.62, 0.72, 0.80] },
+  { name: 'RIVER RUN', gates: 7, waveScale: 0.85, sunEl: 30, exposure: 1.05, foam: 1.0,
+    current: [1.1, 0.7], gust: 0.3, gateW: 14, stepLen: 100, fog: [0.60, 0.70, 0.79] },
+  { name: 'OPEN SEA',  gates: 8, waveScale: 1.30, sunEl: 20, exposure: 1.00, foam: 1.3,
+    current: [0.8, -0.6], gust: 0.6, gateW: 15, stepLen: 110, fog: [0.55, 0.66, 0.76] },
+  { name: 'STORM',     gates: 9, waveScale: 1.70, sunEl: 9,  exposure: 0.85, foam: 2.0,
+    current: [1.4, 1.0], gust: 1.4, gateW: 16, stepLen: 115, fog: [0.38, 0.44, 0.52] },
+];
+const SUN_AZ = 205 * Math.PI / 180;
+
+/* ---------------- wave model (shared JS/WGSL) ----------------
+   13 directional waves, deep-water dispersion. JS port includes the
+   slow sea-state wander so the boat rides the rendered swell.      */
+const G = 9.81;
+const WAVES = [
+  [      8,    52.0,   0.802,   0.0 ],
+  [   -12,    47.0,   0.718,   1.9 ],
+  [    38,    58.0,   0.667,   3.6 ],
+  [   -48,    28.0,   0.911,   1.7 ],
+  [    72,    25.0,   0.709,   4.2 ],
+  [   -68,    38.0,   0.566,   2.6 ],
+  [   108,    22.0,   0.365,   5.1 ],
+  [   -28,    17.0,   0.275,   3.1 ],
+  [    58,    11.0,   0.181,   4.4 ],
+  [   -82,     7.2,   0.119,   2.2 ],
+  [    18,     4.6,   0.068,   5.5 ],
+  [   -52,     2.9,   0.043,   0.9 ],
+  [    96,     1.8,   0.028,   2.8 ],
+].map(([deg, L, A, phase]) => {
+  const rad = deg * Math.PI / 180;
+  const k = 2 * Math.PI / L, omega = Math.sqrt(G * k);
+  return { dx: Math.cos(rad), dz: Math.sin(rad), k, amp: A, omega, phase,
+           steep: A * k, baseL: L, baseA: A };
+});
+let MAXH = WAVES.reduce((s, w) => s + w.amp, 0);
+function buildWaves(scale) {
+  for (const w of WAVES) {
+    const Ls = w.baseL * scale, As = w.baseA * scale;
+    w.k = 2 * Math.PI / Ls; w.omega = Math.sqrt(G * w.k);
+    w.amp = As; w.steep = As * w.k;
+  }
+  MAXH = WAVES.reduce((s, w) => s + w.amp, 0);
+}
+// JS wave sample WITH the shader's wander + short-crested modulation
+// (skips group fbm + crest shaping: sub-boat-scale detail). Returns h.
+function waveH(x, z, t) {
+  const sc1 = Math.sin(x * 0.061 + z * 0.043 + t * 0.11);
+  const sc2 = Math.sin(-x * 0.052 + z * 0.071 - t * 0.073);
+  let h = 0;
+  for (let i = 0; i < 13; i++) {
+    const w = WAVES[i];
+    let amp = w.amp;
+    if (i >= 5) {
+      const sci = 0.82 + 0.18 * sc1 * sc2 * Math.sin(i * 2.39) * Math.sin(i * 1.31 + 0.7);
+      amp *= Math.max(0.65, Math.min(1, sci));
+    }
+    const wob = i + 1;
+    const ampW = 1.0 + 0.30 * Math.sin(t * 0.023 * wob + i * 2.39)
+                           * Math.sin(t * 0.011 * (wob + 1.0) + i * 1.71);
+    let f = w.k * (w.dx * x + w.dz * z) - w.omega * t + w.phase
+          + 0.9 * Math.sin(t * 0.019 * wob + i * 4.13);
+    if (i >= 5) {
+      f += 0.7 * Math.sin(x * 0.19 + z * 0.11 + i * 1.7 + t * 0.21)
+                 * Math.sin(-x * 0.13 + z * 0.17 - t * 0.13 + i * 0.9);
+    }
+    h += amp * ampW * Math.sin(f);
+  }
+  return h;
+}
+function waveGrad(x, z, t) {  // finite-difference gradient + height
+  const e = 1.5;
+  const h  = waveH(x, z, t);
+  const hx = waveH(x + e, z, t), hz = waveH(x, z + e, t);
+  return { h, gx: (hx - h) / e, gz: (hz - h) / e };
+}
+
+/* ---------------- audio (all synthesized) ---------------- */
+const AudioSys = {
+  ctx: null, master: null, engOsc: null, engGain: null, engFilter: null, muted: false,
+  init() {
+    if (this.ctx) return;
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      this.master = this.ctx.createGain(); this.master.gain.value = 0.5;
+      this.master.connect(this.ctx.destination);
+      this.engOsc = this.ctx.createOscillator(); this.engOsc.type = 'sawtooth';
+      this.engOsc.frequency.value = 55;
+      this.engFilter = this.ctx.createBiquadFilter(); this.engFilter.type = 'lowpass';
+      this.engFilter.frequency.value = 320; this.engFilter.Q.value = 2;
+      this.engGain = this.ctx.createGain(); this.engGain.gain.value = 0;
+      this.engOsc.connect(this.engFilter).connect(this.engGain).connect(this.master);
+      this.engOsc.start();
+    } catch (e) { /* no audio */ }
+  },
+  engine(thr, racing) {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    this.engOsc.frequency.setTargetAtTime(52 + thr * 95, t, 0.08);
+    this.engFilter.frequency.setTargetAtTime(280 + thr * 900, t, 0.08);
+    this.engGain.gain.setTargetAtTime(racing ? 0.05 + thr * 0.11 : 0.0, t, 0.1);
+  },
+  noiseBurst(dur, freq, gain) {
+    if (!this.ctx || this.muted) return;
+    const n = Math.floor(this.ctx.sampleRate * dur);
+    const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 0.8;
+    const g = this.ctx.createGain(); g.gain.value = gain;
+    src.connect(f).connect(g).connect(this.master); src.start();
+  },
+  splash(big) { this.noiseBurst(big ? 0.5 : 0.25, big ? 900 : 1600, big ? 0.35 : 0.18); },
+  thud() { this.noiseBurst(0.18, 220, 0.5); },
+  tone(f0, f1, dur, gain, type) {
+    if (!this.ctx || this.muted) return;
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(f0, this.ctx.currentTime);
+    o.frequency.exponentialRampToValueAtTime(Math.max(f1, 1), this.ctx.currentTime + dur);
+    g.gain.setValueAtTime(gain, this.ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + dur);
+    o.connect(g).connect(this.master); o.start(); o.stop(this.ctx.currentTime + dur);
+  },
+  chime() { this.tone(880, 880, 0.12, 0.25); setTimeout(() => this.tone(1318, 1318, 0.2, 0.25), 110); },
+  beep(hi) { this.tone(hi ? 880 : 440, hi ? 880 : 440, hi ? 0.35 : 0.18, 0.3, 'square'); },
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.master) this.master.gain.value = this.muted ? 0 : 0.5;
+    return this.muted;
+  },
+};
+
+/* ---------------- input ---------------- */
+const keys = {};
+window.addEventListener('keydown', e => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  keys[e.code] = true;
+  if (e.code === 'KeyM') toast(AudioSys.toggleMute() ? 'MUTED' : 'SOUND ON');
+  if (e.code === 'KeyP') togglePause();
+  if (e.code === 'Enter') confirmUI();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+function inputState() {
+  let thr = 0, rud = 0, brake = false;
+  if (keys.KeyW || keys.ArrowUp) thr = 1;
+  if (keys.KeyS || keys.ArrowDown) { brake = true; }
+  if (keys.KeyA || keys.ArrowLeft) rud -= 1;
+  if (keys.KeyD || keys.ArrowRight) rud += 1;
+  return { thr, rud, brake };
+}
+
+/* ---------------- mesh builders (CPU, non-indexed, flat normals) ----------------
+   vertex: px,py,pz, nx,ny,nz, r,g,b, a  (10 floats) */
+function MeshBuilder() {
+  this.arr = [];
+}
+MeshBuilder.prototype.tri = function(a, b, c, col, alpha) {
+  const ux = b[0]-a[0], uy = b[1]-a[1], uz = b[2]-a[2];
+  const vx = c[0]-a[0], vy = c[1]-a[1], vz = c[2]-a[2];
+  let nx = uy*vz-uz*vy, ny = uz*vx-ux*vz, nz = ux*vy-uy*vx;
+  const l = Math.hypot(nx, ny, nz) || 1; nx/=l; ny/=l; nz/=l;
+  const al = alpha === undefined ? 1 : alpha;
+  for (const p of [a, b, c]) this.arr.push(p[0],p[1],p[2], col[0],col[1],col[2]);
+};
+MeshBuilder.prototype.quad = function(a, b, c, d, col, alpha) {
+  this.tri(a, b, c, col, alpha); this.tri(a, c, d, col, alpha);
+};
+MeshBuilder.prototype.build = function() { return new Float32Array(this.arr); };
+
+const C_HULL = [0.93, 0.94, 0.96], C_STRIPE = [0.85, 0.12, 0.10],
+      C_DECK = [0.78, 0.80, 0.83], C_BOTTOM = [0.13, 0.15, 0.18],
+      C_DARK = [0.08, 0.09, 0.11], C_GLASS = [0.10, 0.16, 0.24],
+      C_BUOY_R = [0.82, 0.10, 0.08], C_BUOY_W = [0.94, 0.94, 0.95],
+      C_POLE = [0.35, 0.36, 0.38], C_BALL = [1.0, 0.45, 0.08];
+
+// speedboat ~4.2 m, bow toward +X
+function buildBoat() {
+  const M = new MeshBuilder();
+  const st = [ // x, halfW, deckY, keelY
+    [ 2.10, 0.03, 0.52,  0.30],
+    [ 1.50, 0.42, 0.60,  0.08],
+    [ 0.70, 0.72, 0.66, -0.12],
+    [-0.30, 0.82, 0.68, -0.20],
+    [-1.30, 0.78, 0.68, -0.20],
+    [-2.10, 0.66, 0.64, -0.16],
+  ];
+  const sec = s => {
+    const [x, w, dy, ky] = s;
+    return {
+      sheerR: [x, w, dy], bandR: [x, w, dy - 0.15],
+      chineR: [x, w * 0.92, dy - 0.32], keel: [x, 0, ky],
+      chineL: [x, -w * 0.92, dy - 0.32], bandL: [x, -w, dy - 0.15],
+      sheerL: [x, -w, dy], deckC: [x, 0, dy + 0.02],
+    };
+  };
+  for (let i = 0; i < st.length - 1; i++) {
+    const A = sec(st[i]), B = sec(st[i + 1]);
+    for (const s of [1, -1]) {
+      const sh = p => s > 0 ? p + 'R' : p + 'L';
+      M.quad(A[sh('sheer')], B[sh('sheer')], B[sh('band')], A[sh('band')], C_STRIPE);
+      M.quad(A[sh('band')], B[sh('band')], B[sh('chine')], A[sh('chine')], C_HULL);
+      M.quad(A[sh('chine')], B[sh('chine')], B.keel, A.keel, C_BOTTOM);
+    }
+    M.quad(A.deckC, B.deckC, B.sheerR, A.sheerR, C_DECK);
+    M.quad(A.sheerL, B.sheerL, B.deckC, A.deckC, C_DECK);
+  }
+  // bow cap + transom
+  const A0 = sec(st[0]), AL = sec(st[st.length - 1]);
+  M.tri(A0.sheerR, A0.keel, A0.sheerL, C_HULL);
+  M.quad(AL.sheerR, AL.sheerL, AL.keel, AL.keel, C_HULL);
+  M.quad(AL.deckC, AL.sheerR, AL.sheerL, AL.deckC, C_DECK);
+  // cockpit coaming + windshield
+  const cx0 = 0.35, cx1 = -0.75, cw = 0.52, ch0 = 0.68, ch1 = 0.95;
+  M.quad([cx0, cw, ch0], [cx1, cw, ch0], [cx1, cw, ch1], [cx0, cw, ch1], C_DARK);
+  M.quad([cx1, -cw, ch0], [cx0, -cw, ch0], [cx0, -cw, ch1], [cx1, -cw, ch1], C_DARK);
+  M.quad([cx1, cw, ch0], [cx1, -cw, ch0], [cx1, -cw, ch1], [cx1, cw, ch1], C_DARK);
+  // windshield (raked)
+  M.quad([cx0 + 0.05, cw * 0.92, ch0 + 0.02], [cx0 + 0.05, -cw * 0.92, ch0 + 0.02],
+         [cx0 - 0.42, -cw * 0.92, ch1 + 0.18], [cx0 - 0.42, cw * 0.92, ch1 + 0.18], C_GLASS);
+  // seat
+  M.quad([-0.35, 0.3, ch0], [-0.75, 0.3, ch0], [-0.75, -0.3, ch0], [-0.35, -0.3, ch0], C_DARK);
+  // outboard motor
+  M.quad([-2.10, 0.22, 0.62], [-2.10, -0.22, 0.62], [-2.10, -0.22, 0.10], [-2.10, 0.22, 0.10], C_DARK);
+  M.quad([-2.10, 0.22, 0.62], [-2.45, 0.20, 0.60], [-2.45, -0.20, 0.60], [-2.10, -0.22, 0.62], C_DARK);
+  M.quad([-2.45, 0.20, 0.60], [-2.45, -0.20, 0.60], [-2.45, -0.20, 0.05], [-2.45, 0.20, 0.05], C_DARK);
+  M.tri([-2.45, 0, 0.05], [-2.75, 0, -0.25], [-2.45, 0, -0.25], C_DARK);
+  return M.build();
+}
+
+// buoy: striped cylinder + pole + top ball, base at y=0
+function buildBuoy() {
+  const M = new MeshBuilder();
+  const SEG = 10, R = 0.55, H = 1.5;
+  const bands = [[0, 0.5, C_BUOY_R], [0.5, 1.0, C_BUOY_W], [1.0, 1.5, C_BUOY_R]];
+  for (const [y0, y1, col] of bands) {
+    for (let i = 0; i < SEG; i++) {
+      const a0 = i / SEG * Math.PI * 2, a1 = (i + 1) / SEG * Math.PI * 2;
+      const p00 = [Math.cos(a0) * R, y0, Math.sin(a0) * R], p01 = [Math.cos(a0) * R, y1, Math.sin(a0) * R];
+      const p10 = [Math.cos(a1) * R, y0, Math.sin(a1) * R], p11 = [Math.cos(a1) * R, y1, Math.sin(a1) * R];
+      M.quad(p00, p10, p11, p01, col);
+    }
+  }
+  // top cap + base ring
+  for (let i = 0; i < SEG; i++) {
+    const a0 = i / SEG * Math.PI * 2, a1 = (i + 1) / SEG * Math.PI * 2;
+    M.tri([0, H, 0], [Math.cos(a0) * R, H, Math.sin(a0) * R], [Math.cos(a1) * R, H, Math.sin(a1) * R], C_BUOY_R);
+    M.tri([0, 0.02, 0], [Math.cos(a1) * R * 1.06, 0.02, Math.sin(a1) * R * 1.06],
+          [Math.cos(a0) * R * 1.06, 0.02, Math.sin(a0) * R * 1.06], C_DARK);
+  }
+  // pole + ball
+  for (let i = 0; i < 6; i++) {
+    const a0 = i / 6 * Math.PI * 2, a1 = (i + 1) / 6 * Math.PI * 2, r = 0.06;
+    M.quad([Math.cos(a0)*r, H, Math.sin(a0)*r], [Math.cos(a1)*r, H, Math.sin(a1)*r],
+           [Math.cos(a1)*r, H+0.75, Math.sin(a1)*r], [Math.cos(a0)*r, H+0.75, Math.sin(a0)*r], C_POLE);
+  }
+  // ball: two stacked cones as cheap sphere
+  for (let i = 0; i < 8; i++) {
+    const a0 = i / 8 * Math.PI * 2, a1 = (i + 1) / 8 * Math.PI * 2, r = 0.17, yb = H + 0.85;
+    M.tri([0, yb + 0.17, 0], [Math.cos(a0)*r, yb, Math.sin(a0)*r], [Math.cos(a1)*r, yb, Math.sin(a1)*r], C_BALL);
+    M.tri([0, yb - 0.17, 0], [Math.cos(a1)*r, yb, Math.sin(a1)*r], [Math.cos(a0)*r, yb, Math.sin(a0)*r], C_BALL);
+  }
+  return M.build();
+}
+
+// transform baked verts by basis (fx,fy,fz / ux,uy,uz / rx,ry,rz) + translation
+function xformVerts(src, dst, doff, fx,fy,fz, ux,uy,uz, rx,ry,rz, px,py,pz) {
+  const n = src.length / 6;
+  for (let i = 0; i < n; i++) {
+    const s = i * 6, d = doff + i * 6;
+    const x = src[s], y = src[s+1], z = src[s+2];
+    dst[d]   = fx*x + ux*y + rx*z + px;
+    dst[d+1] = fy*x + uy*y + ry*z + py;
+    dst[d+2] = fz*x + uz*y + rz*z + pz;
+    dst[d+3] = src[s+3]; dst[d+4] = src[s+4]; dst[d+5] = src[s+5];
+  }
+  return n;
+}
+
+/* ---------------- game state ---------------- */
+const GS = { TITLE: 0, COUNT: 1, RACE: 2, PAUSE: 3, LEVELDONE: 4, OVER: 5, CAMP: 6 };
+const game = {
+  state: GS.TITLE, level: 0, gate: 0, time: 0, limit: 0,
+  gates: [], buoys: [], stars: [], totalStars: 0, totalTime: 0,
+  countT: 0, shake: 0, toastT: 0, wrongWay: false,
+  boat: { x: 0, z: 0, h: 0, vx: 0, vz: 0, thr: 0, vy: 0, py: 0 },
+  cam: { px: 0, py: 8, pz: -14 },
+};
+const boatVerts = buildBoat();
+const buoyVerts = buildBuoy();
+
+function sunForLevel(L) {
+  const el = L.sunEl * Math.PI / 180;
+  const dir = [Math.cos(el) * Math.cos(SUN_AZ), Math.sin(el), Math.cos(el) * Math.sin(SUN_AZ)];
+  // warm color follows elevation: low sun = orange
+  const w = Math.max(0, Math.min(1, (L.sunEl - 6) / 30));
+  const col = [1.0, 0.62 + 0.30 * w, 0.38 + 0.42 * w];
+  return { dir, col };
+}
+
+// deterministic course: weaving gates ahead of start
+function genCourse(L, idx) {
+  const gates = [];
+  const seed = idx * 7.3 + 1.7;
+  let x = 0;
+  for (let i = 0; i < L.gates; i++) {
+    x += L.stepLen * (0.92 + 0.16 * Math.sin(seed + i * 2.1));
+    const z = 55 * Math.sin(i * 0.85 + seed) + 22 * Math.sin(i * 2.2 + seed * 1.7);
+    gates.push({ cx: x, cz: z, hw: L.gateW / 2 });
+  }
+  return gates;
+}
+function levelBounds() {
+  let mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9;
+  for (const g of game.gates) {
+    mnx = Math.min(mnx, g.cx - 30); mxx = Math.max(mxx, g.cx + 30);
+    mnz = Math.min(mnz, g.cz - g.hw - 30); mxz = Math.max(mxz, g.cz + g.hw + 30);
+  }
+  mnx = Math.min(mnx, -60);
+  return { mnx, mxx, mnz, mxz };
+}
+
+function startLevel(idx) {
+  const L = LEVELS[idx];
+  game.level = idx; game.gates = genCourse(L, idx);
+  game.buoys = [];
+  for (const g of game.gates) {
+    game.buoys.push({ x: g.cx, z: g.cz - g.hw, hitCd: 0 });
+    game.buoys.push({ x: g.cx, z: g.cz + g.hw, hitCd: 0 });
+  }
+  const g0 = game.gates[0];
+  game.boat = { x: -38, z: g0.cz, h: 0, vx: 0, vz: 0, thr: 0, vy: 0, py: 0 };
+  game.gate = 0; game.time = 0; game.shake = 0; game.wrongWay = false;
+  // par from course length; limit generous
+  const courseLen = g0.cx + 38 + L.gates * 20;
+  L.par3 = courseLen / 13.5; L.par2 = courseLen / 10.0;
+  game.limit = courseLen / 5.5;
+  buildWaves(L.waveScale); uploadWaves();
+  wake.samples.length = 0;
+  setState(GS.COUNT); game.countT = 3.6;
+  document.getElementById('gateinfo').textContent = `GATE 0/${L.gates}`;
+  document.getElementById('parinfo').textContent = `PAR ${fmtTime(L.par3)} · ${L.name}`;
+  updateLevelCard();
+}
+function setState(s) {
+  game.state = s;
+  for (const id of ['s-title','s-count','s-level','s-over','s-camp','s-pause'])
+    document.getElementById(id).classList.add('hidden');
+  if (s === GS.TITLE) show('s-title');
+  else if (s === GS.COUNT) show('s-count');
+  else if (s === GS.LEVELDONE) show('s-level');
+  else if (s === GS.OVER) show('s-over');
+  else if (s === GS.CAMP) show('s-camp');
+  else if (s === GS.PAUSE) show('s-pause');
+}
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function confirmUI() {
+  AudioSys.init();
+  if (game.state === GS.TITLE) startLevel(START_LEVEL < LEVELS.length ? START_LEVEL : 0);
+  else if (game.state === GS.LEVELDONE) nextLevel();
+  else if (game.state === GS.OVER) startLevel(game.level);
+  else if (game.state === GS.CAMP) { game.totalStars = 0; game.totalTime = 0; startLevel(0); }
+}
+function togglePause() {
+  if (game.state === GS.RACE) setState(GS.PAUSE);
+  else if (game.state === GS.PAUSE) setState(GS.RACE);
+}
+function nextLevel() {
+  if (game.level + 1 < LEVELS.length) startLevel(game.level + 1);
+  else {
+    document.getElementById('camp-stars').textContent = '★'.repeat(game.totalStars) + '☆'.repeat(LEVELS.length * 3 - game.totalStars);
+    document.getElementById('camp-time').textContent = 'Total ' + fmtTime(game.totalTime);
+    setState(GS.CAMP);
+  }
+}
+function fmtTime(t) {
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return m + ':' + s.toFixed(1).padStart(4, '0');
+}
+function updateLevelCard() {
+  const L = LEVELS[game.level];
+  document.getElementById('lv-title').textContent = L.name + ' COMPLETE';
+}
+function toast(msg, dur) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.style.opacity = 1;
+  game.toastT = dur || 1.4;
+}
+
+/* ---------------- physics (fixed 120 Hz) ---------------- */
+const P_DT = 1 / 120;
+let physAcc = 0;
+function stepPhysics(dt, wt, inp) {
+  const b = game.boat, L = LEVELS[game.level];
+  const fwdx = Math.cos(b.h), fwdz = Math.sin(b.h);
+  const rgtx = -fwdz, rgtz = fwdx;
+  // throttle ramp
+  const thrT = (game.state === GS.RACE) ? inp.thr : 0;
+  b.thr += (thrT - b.thr) * Math.min(1, dt * 3.2);
+  const rud = (game.state === GS.RACE) ? inp.rud : 0;
+  // decompose velocity
+  let vf = b.vx * fwdx + b.vz * fwdz;
+  let vr = b.vx * rgtx + b.vz * rgtz;
+  // thrust
+  vf += b.thr * 42 * dt;
+  // brake / reverse
+  if (inp.brake && game.state === GS.RACE) {
+    if (vf > 0.5) vf -= 34 * dt; else vf = Math.max(vf - 14 * dt, -7);
+  }
+  // drag: quadratic-ish longitudinal, strong lateral grip
+  vf -= vf * (0.26 + 0.011 * Math.abs(vf)) * dt;
+  vr -= vr * 2.8 * dt;
+  // steering (needs some speed; weaker in reverse)
+  const spd = Math.abs(vf);
+  const auth = Math.min(spd / 9, 1);
+  b.h += rud * (0.55 + 1.75 * auth) * (vf >= 0 ? 1 : -1) * dt;
+  // current (with gusts on storm)
+  let curx = L.current[0], curz = L.current[1];
+  if (L.gust > 0) {
+    const g = 1 + L.gust * 0.55 * Math.sin(wt * 0.9) * Math.sin(wt * 0.37 + 2.0);
+    curx *= g; curz *= g;
+  }
+  // wave push: sample gradient, push downhill slightly
+  const wg = waveGrad(b.x, b.z, wt);
+  vf += -(wg.gx * fwdx + wg.gz * fwdz) * 2.2 * dt;
+  vr += -(wg.gx * rgtx + wg.gz * rgtz) * 2.2 * dt;
+  // recompose + integrate
+  b.vx = fwdx * vf + rgtx * vr;
+  b.vz = fwdz * vf + rgtz * vr;
+  const px0 = b.x, pz0 = b.z;
+  b.x += (b.vx + curx) * dt;
+  b.z += (b.vz + curz) * dt;
+  // vertical: ride the swell
+  const hNew = waveH(b.x, b.z, wt);
+  b.vy = (hNew - b.py) / dt; b.py = hNew;
+  // bow-slam spray: falling fast while moving fast
+  if (b.vy < -3.2 && spd > 9) spawnSpray(b.x + fwdx * 2.2, hNew + 0.4, b.z + fwdz * 2.2, 10, fwdx, fwdz);
+  // turn spray at speed
+  if (Math.abs(rud) > 0.7 && spd > 12 && Math.random() < 0.5)
+    spawnSpray(b.x - fwdx * 1.5, hNew + 0.3, b.z - fwdz * 1.5, 2, -rgtx * rud, -rgtz * rud);
+  // buoy collisions
+  for (const by of game.buoys) {
+    if (by.hitCd > 0) { by.hitCd -= dt; continue; }
+    const dx = b.x - by.x, dz = b.z - by.z;
+    const d2 = dx * dx + dz * dz, rr = 2.0;
+    if (d2 < rr * rr && d2 > 1e-6) {
+      const d = Math.sqrt(d2), nx = dx / d, nz = dz / d;
+      b.x = by.x + nx * rr; b.z = by.z + nz * rr;
+      const vn = b.vx * nx + b.vz * nz;
+      if (vn < 0) { b.vx -= 1.7 * vn * nx; b.vz -= 1.7 * vn * nz; }
+      b.vx *= 0.62; b.vz *= 0.62;
+      by.hitCd = 1.0; game.shake = 0.55;
+      spawnSpray(by.x, waveH(by.x, by.z, wt) + 0.6, by.z, 16, nx, nz);
+      AudioSys.thud(); AudioSys.splash(true);
+      toast('BUOY HIT!', 0.9);
+    }
+  }
+  // gate crossing: boat segment vs gate line segment
+  if (game.gate < game.gates.length) {
+    const g = game.gates[game.gate];
+    const ax = g.cx, az1 = g.cz - g.hw, bz1 = g.cz + g.hw;
+    if (segInt(px0, pz0, b.x, b.z, ax, az1, ax, bz1)) {
+      game.gate++;
+      AudioSys.chime();
+      spawnSpray(b.x, b.py + 0.5, b.z, 8, fwdx, fwdz);
+      if (game.gate >= game.gates.length) levelDone();
+      else {
+        toast(`GATE ${game.gate}/${game.gates.length}`);
+        document.getElementById('gateinfo').textContent = `GATE ${game.gate}/${game.gates.length}`;
+      }
+    }
+  }
+  // wrong way
+  const g = game.gates[Math.min(game.gate, game.gates.length - 1)];
+  const tgx = g.cx - b.x, tgz = g.cz - b.z;
+  const tl = Math.hypot(tgx, tgz) || 1;
+  game.wrongWay = spd > 4 && (b.vx * tgx + b.vz * tgz) / tl < -1.5;
+  // world soft bounds
+  const B = 700;
+  if (Math.abs(b.x) > B || Math.abs(b.z) > B) {
+    b.vx *= 0.985; b.vz *= 0.985;
+    b.x -= Math.sign(b.x) * Math.max(0, Math.abs(b.x) - B) * 0.02;
+    b.z -= Math.sign(b.z) * Math.max(0, Math.abs(b.z) - B) * 0.02;
+  }
+  // time
+  game.time += dt;
+  if (game.time > game.limit) {
+    setState(GS.OVER); AudioSys.beep(false);
+  }
+}
+function segInt(x1,z1,x2,z2,x3,z3,x4,z4) {
+  const d = (x2-x1)*(z4-z3) - (z2-z1)*(x4-x3);
+  if (Math.abs(d) < 1e-9) return false;
+  const t = ((x3-x1)*(z4-z3) - (z3-z1)*(x4-x3)) / d;
+  const u = ((x3-x1)*(z2-z1) - (z3-z1)*(x2-x1)) / d;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+function levelDone() {
+  const L = LEVELS[game.level];
+  const stars = game.time <= L.par3 ? 3 : game.time <= L.par2 ? 2 : 1;
+  game.stars[game.level] = stars;
+  game.totalStars += stars; game.totalTime += game.time;
+  document.getElementById('lv-stars').textContent = '★'.repeat(stars) + '☆'.repeat(3 - stars);
+  document.getElementById('lv-time').textContent = `Time ${fmtTime(game.time)} · Par ${fmtTime(L.par3)}`;
+  document.getElementById('b-next').textContent = game.level + 1 < LEVELS.length ? 'NEXT LEVEL →' : 'FINISH →';
+  setState(GS.LEVELDONE);
+  AudioSys.chime(); setTimeout(() => AudioSys.chime(), 350);
+}
+
+// test/debug handle
+window.__game = game;
+let curWt = 2;
+window.__debugStep = function(n, thr, rud) {
+  const inp = { thr: thr === undefined ? 1 : thr, rud: rud || 0, brake: false };
+  for (let i = 0; i < n; i++) stepPhysics(P_DT, curWt, inp);
+  return { x: game.boat.x, z: game.boat.z, gate: game.gate, time: game.time, state: game.state };
+};
+
+/* ---------------- spray particles (driven by game events) ---------------- */
+const P_COUNT = 240;
+const parts = [];
+for (let i = 0; i < P_COUNT; i++)
+  parts.push({ on: false, x: 0, y: -99, z: 0, vx: 0, vy: 0, vz: 0, life: 0, maxLife: 1, size: 0.3, seed: Math.random() * 100 });
+let spawnCursor = 0;
+function spawnSpray(x, y, z, n, dx, dz) {
+  for (let k = 0; k < n; k++) {
+    const p = parts[spawnCursor]; spawnCursor = (spawnCursor + 1) % P_COUNT;
+    p.on = true;
+    p.x = x + (Math.random() - 0.5) * 0.8; p.y = y; p.z = z + (Math.random() - 0.5) * 0.8;
+    const sp = 2 + Math.random() * 4;
+    p.vx = dx * sp + (Math.random() - 0.5) * 2;
+    p.vz = dz * sp + (Math.random() - 0.5) * 2;
+    p.vy = 1.5 + Math.random() * 3.5;
+    p.maxLife = p.life = 0.6 + Math.random() * 0.8;
+    p.size = 0.25 + Math.random() * 0.55;
+  }
+}
+function stepParticles(dt, wt) {
+  for (const p of parts) {
+    if (!p.on) continue;
+    p.life -= dt;
+    p.vy -= 5.2 * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+    if (p.life <= 0 || p.y < waveH(p.x, p.z, wt) - 0.2) p.on = false;
+  }
+}
+
+/* ---------------- wake ribbon ---------------- */
+const wake = { samples: [], timer: 0 };
+function stepWake(dt, wt) {
+  const b = game.boat;
+  const spd = Math.hypot(b.vx, b.vz);
+  wake.timer -= dt;
+  if (spd > 3 && wake.timer <= 0) {
+    wake.timer = 0.07;
+    wake.samples.push({ x: b.x, z: b.z, fx: Math.cos(b.h), fz: Math.sin(b.h), age: 0 });
+    if (wake.samples.length > 90) wake.samples.shift();
+  }
+  for (const s of wake.samples) s.age += dt;
+  while (wake.samples.length && wake.samples[0].age > 5.5) wake.samples.shift();
+}
+function buildWakeVerts(dst, doff, wt) {
+  // returns vertex count; each sample -> 2 verts (left/right)
+  let vc = 0;
+  const n = wake.samples.length;
+  for (let i = 0; i < n; i++) {
+    const s = wake.samples[i];
+    const wdt = Math.min(0.9 + s.age * 1.1, 3.4);
+    const alpha = 0.40 * Math.max(0, 1 - s.age / 5.5);
+    const px = -s.fz, pz = s.fx; // perpendicular
+    for (const side of [-1, 1]) {
+      const x = s.x + px * wdt * side - s.fx * 1.2, z = s.z + pz * wdt * side - s.fz * 1.2;
+      const y = waveH(x, z, wt) + 0.09;
+      const o = (doff + vc) * 10;
+      dst[o] = x; dst[o+1] = y; dst[o+2] = z;
+      dst[o+3] = 0; dst[o+4] = 1; dst[o+5] = 0;
+      dst[o+6] = 0.92; dst[o+7] = 0.96; dst[o+8] = 0.98;
+      dst[o+9] = alpha;
+      vc++;
+    }
+  }
+  return vc;
+}
+function buildWakeIndices(vc) {
+  // triangle list indices into the ribbon verts (computed on CPU into index buffer? -> expand to tris)
+  return vc;
+}
+
+/* ---------------- camera (chase) ---------------- */
+const cam = { pos: [0, 8, -14], fwd: [0, -0.2, 1], right: [1, 0, 0], up: [0, 1, 0] };
+function updateCamera(dt, wt) {
+  const b = game.boat;
+  const fx = Math.cos(b.h), fz = Math.sin(b.h);
+  const spd = Math.hypot(b.vx, b.vz);
+  const dist = 10.5 + spd * 0.14, hgt = 4.8 + spd * 0.03;
+  const wy = waveH(b.x, b.z, wt);
+  const dx = b.x - fx * dist, dz = b.z - fz * dist;
+  const dy = Math.max(wy + hgt, waveH(dx, dz, wt) + 2.4);
+  const k = 1 - Math.exp(-4.2 * dt);
+  cam.pos[0] += (dx - cam.pos[0]) * k;
+  cam.pos[1] += (dy - cam.pos[1]) * k;
+  cam.pos[2] += (dz - cam.pos[2]) * k;
+  // shake
+  if (game.shake > 0) {
+    game.shake = Math.max(0, game.shake - dt * 1.6);
+    cam.pos[0] += (Math.random() - 0.5) * game.shake * 0.7;
+    cam.pos[1] += (Math.random() - 0.5) * game.shake * 0.5;
+  }
+  const lx = b.x + fx * 7, ly = wy + 1.7, lz = b.z + fz * 7;
+  let fw = [lx - cam.pos[0], ly - cam.pos[1], lz - cam.pos[2]];
+  const fl = Math.hypot(fw[0], fw[1], fw[2]) || 1; fw = [fw[0]/fl, fw[1]/fl, fw[2]/fl];
+  let rt = cross(fw, [0, 1, 0]);
+  const rl = Math.hypot(rt[0], rt[1], rt[2]) || 1; rt = [rt[0]/rl, rt[1]/rl, rt[2]/rl];
+  const up = cross(rt, fw);
+  cam.fwd = fw; cam.right = rt; cam.up = up;
+}
+function cross(a, b) {
+  return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+}
+function mat4Persp(out, tanH, aspect, near, far) {
+  const f = 1 / tanH;
+  out.fill(0);
+  out[0] = f / aspect; out[5] = f; out[10] = far / (far - near); out[11] = 1;
+  out[14] = -far * near / (far - near);
+  return out;
+}
+function mat4Look(out, eye, fwd, right, up) {
+  // column-major view matrix; view.z = dot(p - eye, fwd) (forward positive)
+  const dr = -(right[0]*eye[0]+right[1]*eye[1]+right[2]*eye[2]);
+  const du = -(up[0]*eye[0]+up[1]*eye[1]+up[2]*eye[2]);
+  const df = -(fwd[0]*eye[0]+fwd[1]*eye[1]+fwd[2]*eye[2]);
+  out[0]=right[0]; out[4]=right[1]; out[8]=right[2];  out[12]=dr;
+  out[1]=up[0];    out[5]=up[1];    out[9]=up[2];     out[13]=du;
+  out[2]=fwd[0];   out[6]=fwd[1];   out[10]=fwd[2];   out[14]=df;
+  out[3]=0;        out[7]=0;        out[11]=0;        out[15]=1;
+  return out;
+}
+function mat4Mul(out, a, b) { // out = a * b (column-major)
+  const t = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    t[c*4+r] = a[r]*b[c*4] + a[4+r]*b[c*4+1] + a[8+r]*b[c*4+2] + a[12+r]*b[c*4+3];
+  }
+  out.set(t); return out;
+}
+
+/* ---------------- HUD / DOM ---------------- */
+const el = id => document.getElementById(id);
+const mm = el('minimap').getContext('2d');
+function fmtInt(n) { return n; }
+
+function updateHUD(wt) {
+  const b = game.boat;
+  const knots = Math.hypot(b.vx, b.vz) * 1.944;
+  el('speed').innerHTML = knots.toFixed(0) + '<small> kn</small>';
+  el('thrfill').style.width = (b.thr * 100).toFixed(0) + '%';
+  el('time').textContent = fmtTime(game.time);
+  const L = LEVELS[game.level];
+  el('gateinfo').textContent = `GATE ${Math.min(game.gate, L.gates)}/${L.gates}`;
+  el('wrongway').style.display = game.wrongWay && game.state === GS.RACE ? 'block' : 'none';
+  if (game.toastT > 0) { /* decayed in loop */ }
+  drawMinimap();
+  updateMarker(wt);
+}
+function drawMinimap() {
+  const W = 150, H = 150;
+  mm.clearRect(0, 0, W, H);
+  if (!game.gates.length) return;
+  const B = levelBounds();
+  const sx = W / (B.mxx - B.mnx), sz = H / (B.mxz - B.mnz);
+  const s = Math.min(sx, sz) * 0.92;
+  const ox = (W - (B.mxx - B.mnx) * s) / 2, oz = (H - (B.mxz - B.mnz) * s) / 2;
+  const X = x => ox + (x - B.mnx) * s, Z = z => oz + (z - B.mnz) * s;
+  // gates
+  game.gates.forEach((g, i) => {
+    const done = i < game.gate, next = i === game.gate;
+    mm.strokeStyle = next ? '#4dff88' : done ? 'rgba(160,170,180,.5)' : 'rgba(255,255,255,.85)';
+    mm.lineWidth = next ? 3 : 1.5;
+    mm.beginPath(); mm.moveTo(X(g.cx), Z(g.cz - g.hw)); mm.lineTo(X(g.cx), Z(g.cz + g.hw)); mm.stroke();
+    mm.fillStyle = next ? '#4dff88' : 'rgba(255,255,255,.7)';
+    mm.font = '9px sans-serif'; mm.textAlign = 'center';
+    mm.fillText(String(i + 1), X(g.cx), Z(g.cz - g.hw) - 4);
+  });
+  // boat
+  const b = game.boat;
+  mm.save(); mm.translate(X(b.x), Z(b.z));
+  const ang = b.h; // heading: forward = (cos h, sin h) in xz
+  mm.fillStyle = '#ff5d3a';
+  mm.beginPath();
+  mm.moveTo(Math.cos(ang) * 6, Math.sin(ang) * 6);
+  mm.lineTo(Math.cos(ang + 2.5) * 4, Math.sin(ang + 2.5) * 4);
+  mm.lineTo(Math.cos(ang - 2.5) * 4, Math.sin(ang - 2.5) * 4);
+  mm.closePath(); mm.fill();
+  mm.restore();
+}
+// project next gate to screen for the floating marker
+function updateMarker(wt) {
+  const mk = el('gatemark');
+  if (game.state !== GS.RACE || game.gate >= game.gates.length) { mk.style.display = 'none'; return; }
+  const g = game.gates[game.gate];
+  const gy = waveH(g.cx, g.cz, wt) + 3;
+  const vx = g.cx - cam.pos[0], vy = gy - cam.pos[1], vz = g.cz - cam.pos[2];
+  const z = vx * cam.fwd[0] + vy * cam.fwd[1] + vz * cam.fwd[2];
+  if (z < 2) { mk.style.display = 'none'; return; }
+  const tanH = Math.tan(60 * Math.PI / 360);
+  const aspect = canvas.width / canvas.height;
+  const x = (vx * cam.right[0] + vy * cam.right[1] + vz * cam.right[2]) / (z * tanH * aspect);
+  const y = (vx * cam.up[0] + vy * cam.up[1] + vz * cam.up[2]) / (z * tanH);
+  if (Math.abs(x) > 1.2 || Math.abs(y) > 1.2) { mk.style.display = 'none'; return; }
+  mk.style.display = 'block';
+  mk.style.left = ((x * 0.5 + 0.5) * 100) + '%';
+  mk.style.top = ((0.5 - y * 0.5) * 100) + '%';
+  el('gmn').textContent = game.gate + 1;
+  el('gmd').textContent = '· ' + Math.round(Math.hypot(vx, vz)) + 'm';
+}
+
+/* ---------------- boot & device ---------------- */
+const canvas = document.getElementById('view');
+window.__frames = 0;
+let device, uploadWaves, writeAllUniforms;
+
+(async () => {
+  if (!navigator.gpu) { document.getElementById('nogl').classList.add('show'); return; }
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) { document.getElementById('nogl').classList.add('show'); return; }
+  device = await adapter.requestDevice();
+  console.log('stage: device ok');
+
+  const ctx = canvas.getContext('webgpu');
+  const format = READBACK ? 'rgba8unorm' : navigator.gpu.getPreferredCanvasFormat();
+  const SRGB_OUT = !READBACK && format.indexOf('srgb') >= 0;
+
+  let colorTex = null, readBuf = null, PITCH = 0, depthTex = null, depthView = null;
+  const rbCanvas = document.createElement('canvas');
+  rbCanvas.id = 'rb';
+  rbCanvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;z-index:4;';
+  if (READBACK) { document.body.appendChild(rbCanvas); canvas.style.display = 'none'; }
+  function resize() {
+    const dpr = FORCE_DPR || Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(2, Math.floor((FORCE_W || window.innerWidth) * dpr));
+    const h = Math.max(2, Math.floor((FORCE_H || window.innerHeight) * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w; canvas.height = h;
+      if (!READBACK) ctx.configure({ device, format, alphaMode: 'opaque' });
+      depthTex = device.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      depthView = depthTex.createView();
+      if (READBACK) {
+        colorTex = device.createTexture({ size: [w, h], format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+        PITCH = Math.ceil(w / 64) * 256;
+        if (readBuf) readBuf.destroy();
+        readBuf = device.createBuffer({ size: PITCH * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        rbCanvas.width = w; rbCanvas.height = h;
+      }
+    }
+  }
+  window.addEventListener('resize', resize);
+
+  /* wave storage */
+  const waveData = new Float32Array(WAVES.length * 8);
+  const waveBuf = device.createBuffer({ size: waveData.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  uploadWaves = function() {
+    WAVES.forEach((w, i) => waveData.set([w.dx, w.dz, w.k, w.amp, w.omega, w.phase, w.steep, 0], i * 8));
+    device.queue.writeBuffer(waveBuf, 0, waveData);
+  };
+  uploadWaves();
+
+  /* ocean uniforms (same 40-float layout as the reference) */
+  const U = new Float32Array(40);
+  const uniBuf = device.createBuffer({ size: U.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  /* spray particles */
+  const P = new Float32Array(P_COUNT * 8);
+  const partBuf = device.createBuffer({ size: P.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  /* mesh uniforms */
+  const MU = new Float32Array(40);
+  const muBuf = device.createBuffer({ size: MU.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+
+  /* dynamic vertex buffers: 10 floats/vert (pos, nrm, col, alpha) */
+  const MESH_MAX = 16384, FX_MAX = 4096;
+  const meshArr = new Float32Array(MESH_MAX * 6);
+  const fxArr = new Float32Array(FX_MAX * 6);
+  const meshVB = device.createBuffer({ size: meshArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+  const fxVB = device.createBuffer({ size: fxArr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+
+  /* pipelines */
+  const oceanMod = device.createShaderModule({ code: OCEAN_WGSL });
+  const meshMod = device.createShaderModule({ code: MESH_WGSL });
+  const bgl = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+    { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+    { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+  ]});
+  const mgl = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+  ]});
+  const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
+  const mlayout = device.createPipelineLayout({ bindGroupLayouts: [mgl] });
+  const mainPipe = device.createRenderPipeline({
+    layout, vertex: { module: oceanMod, entryPoint: 'vsMain' },
+    fragment: { module: oceanMod, entryPoint: 'fsMain', targets: [{ format }] },
+    primitive: { topology: 'triangle-list' },
+    depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+  });
+  const quadVerts = new Float32Array([-1,-1, 1,-1, 1,1, -1,-1, 1,1, -1,1]);
+  const quadBuf = device.createBuffer({ size: quadVerts.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(quadBuf, 0, quadVerts);
+  const sprayPipe = device.createRenderPipeline({
+    layout, vertex: { module: oceanMod, entryPoint: 'vsSpray',
+      buffers: [{ arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }] },
+    fragment: { module: oceanMod, entryPoint: 'fsSpray',
+      targets: [{ format, blend: { color: { srcFactor: 'one', dstFactor: 'one' },
+        alpha: { srcFactor: 'one', dstFactor: 'one' } } }] },
+    primitive: { topology: 'triangle-list' },
+    depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+  });
+  const vbufLayout = { arrayStride: 24, attributes: [
+    { shaderLocation: 0, offset: 0, format: 'float32x3' },
+    { shaderLocation: 1, offset: 12, format: 'float32x3' },
+  ]};
+  const meshPipe = device.createRenderPipeline({
+    layout: mlayout, vertex: { module: meshMod, entryPoint: 'vsMesh', buffers: [vbufLayout] },
+    fragment: { module: meshMod, entryPoint: 'fsMesh', targets: [{ format }] },
+    primitive: { topology: 'triangle-list', cullMode: 'back' },
+    depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+  });
+  const fxPipe = device.createRenderPipeline({
+    layout: mlayout, vertex: { module: meshMod, entryPoint: 'vsMesh', buffers: [vbufLayout] },
+    fragment: { module: meshMod, entryPoint: 'fsFx',
+      targets: [{ format, blend: { color: { srcFactor: 'one', dstFactor: 'one' },
+        alpha: { srcFactor: 'one', dstFactor: 'one' } } }] },
+    primitive: { topology: 'triangle-list', cullMode: 'none' },
+    depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+  });
+  const bindGroup = device.createBindGroup({ layout: bgl, entries: [
+    { binding: 0, resource: { buffer: uniBuf } },
+    { binding: 1, resource: { buffer: waveBuf } },
+    { binding: 2, resource: { buffer: partBuf } },
+  ]});
+  const meshBG = device.createBindGroup({ layout: mgl, entries: [
+    { binding: 0, resource: { buffer: muBuf } },
+  ]});
+
+  /* per-frame dynamic geometry */
+  const _vp = new Float32Array(16), _view = new Float32Array(16), _proj = new Float32Array(16);
+  function rebuildMeshes(wt) {
+    let vc = 0;
+    const b = game.boat;
+    // boat basis from wave slope
+    const fx0 = Math.cos(b.h), fz0 = Math.sin(b.h);
+    const rx0 = -fz0, rz0 = fx0;
+    const hF = waveH(b.x + fx0 * 2.2, b.z + fz0 * 2.2, wt), hB = waveH(b.x - fx0 * 2.2, b.z - fz0 * 2.2, wt);
+    const hR = waveH(b.x + rx0 * 1.3, b.z + rz0 * 1.3, wt), hL = waveH(b.x - rx0 * 1.3, b.z - rz0 * 1.3, wt);
+    const tp = (hF - hB) / 4.4, tr = (hR - hL) / 2.6;
+    let fx = fx0, fy = tp, fz = fz0;
+    let rx = rx0, ry = tr, rz = rz0;
+    // up = norm(cross(right, fwd)); fwd = cross(up, right)
+    let ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
+    let ul = Math.hypot(ux, uy, uz) || 1; ux /= ul; uy /= ul; uz /= ul;
+    let f2x = uy * rz - uz * ry, f2y = uz * rx - ux * rz, f2z = ux * ry - uy * rx;
+    const fl = Math.hypot(f2x, f2y, f2z) || 1; f2x /= fl; f2y /= fl; f2z /= fl;
+    const by = waveH(b.x, b.z, wt) + 0.12;
+    vc += xformVerts(boatVerts, meshArr, vc * 6, f2x,f2y,f2z, ux,uy,uz, rx,ry,rz, b.x,by,b.z);
+    // buoys (cull far)
+    for (const byy of game.buoys) {
+      const dx = byy.x - cam.pos[0], dz = byy.z - cam.pos[2];
+      if (dx * dx + dz * dz > 600 * 600) continue;
+      const g = waveGrad(byy.x, byy.z, wt);
+      const yy = g.h + 0.10;
+      // slight tilt from gradient
+      const tx = -g.gx * 0.6, tz = -g.gz * 0.6;
+      let bx = 1, by2 = tx, bz = 0, cx = 0, cy2 = tz, cz = 1;
+      let nx = by2 * cz - 0 * cy2, ny = 0 * cx - bx * cz, nz = bx * cy2 - by2 * cx;
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      // up2 = (nx,ny,nz)/nl ; rebuild fwd2 = cross(up2, (0,0,1))
+      const ux2 = nx / nl, uy2 = ny / nl, uz2 = nz / nl;
+      let wx = uy2 * 1 - uz2 * 0, wy = uz2 * 0 - ux2 * 1, wz = ux2 * 0 - uy2 * 0;
+      const wl = Math.hypot(wx, wy, wz) || 1;
+      vc += xformVerts(buoyVerts, meshArr, vc * 6,
+        wx / wl, wy / wl, wz / wl, ux2, uy2, uz2, 0, 0, 1, byy.x, yy, byy.z);
+      if (vc * 6 + buoyVerts.length > meshArr.length - 100) break;
+    }
+    device.queue.writeBuffer(meshVB, 0, meshArr, 0, vc * 24);
+    return vc;
+  }
+  function rebuildFx(wt) {
+    let vc = 0;
+    // wake ribbon as triangles
+    const n = wake.samples.length;
+    const tmp = [];
+    for (let i = 0; i < n; i++) {
+      const s = wake.samples[i];
+      const wdt = Math.min(0.9 + s.age * 1.1, 3.4);
+      const alpha = 0.40 * Math.max(0, 1 - s.age / 5.5);
+      const px = -s.fz, pz = s.fx;
+      const lx = s.x + px * wdt - s.fx * 1.2, lz = s.z + pz * wdt - s.fz * 1.2;
+      const rx = s.x - px * wdt - s.fx * 1.2, rz = s.z - pz * wdt - s.fz * 1.2;
+      tmp.push({ lx, lz, rx, rz, a: alpha });
+    }
+    for (let i = 0; i + 1 < tmp.length && vc + 6 < FX_MAX; i++) {
+      const A = tmp[i], B = tmp[i + 1];
+      const quad = [
+        [A.lx, A.a, A.lz], [A.rx, A.a, A.rz], [B.rx, B.a, B.rz],
+        [A.lx, A.a, A.lz], [B.rx, B.a, B.rz], [B.lx, B.a, B.lz],
+      ];
+      for (const [x, a, z] of quad) {
+        const y = waveH(x, z, wt) + 0.09;
+        const o = vc * 6;
+        fxArr[o] = x; fxArr[o+1] = y; fxArr[o+2] = z;
+        fxArr[o+3] = 0.90*a; fxArr[o+4] = 0.95*a; fxArr[o+5] = 0.97*a;
+        vc++;
+      }
+    }
+    // next-gate beacon: two crossed pulsing quads
+    if (game.state === GS.RACE && game.gate < game.gates.length) {
+      const g = game.gates[game.gate];
+      const gy = waveH(g.cx, g.cz, wt);
+      const pulse = 0.65 + 0.35 * Math.sin(wt * 5.0);
+      const hw = 1.1, h0 = gy + 0.4, h1 = gy + 13;
+      const quads = [
+        [[g.cx - hw, h0, g.cz], [g.cx + hw, h0, g.cz], [g.cx + hw, h1, g.cz], [g.cx - hw, h1, g.cz]],
+        [[g.cx, h0, g.cz - hw], [g.cx, h0, g.cz + hw], [g.cx, h1, g.cz + hw], [g.cx, h1, g.cz - hw]],
+      ];
+      for (const qq of quads) {
+        const tris = [qq[0], qq[1], qq[2], qq[0], qq[2], qq[3]];
+        const alphas = [0.04, 0.04, 0.5 * pulse, 0.04, 0.5 * pulse, 0.04];
+        for (let k = 0; k < 6; k++) {
+          const o = vc * 6, p = tris[k];
+          fxArr[o] = p[0]; fxArr[o+1] = p[1]; fxArr[o+2] = p[2];
+          const ba = alphas[k];
+          fxArr[o+3] = 0.35*ba; fxArr[o+4] = 1.0*ba; fxArr[o+5] = 0.55*ba;
+          vc++;
+        }
+      }
+    }
+    device.queue.writeBuffer(fxVB, 0, fxArr.subarray(0, vc * 6));
+    return vc;
+  }
+  function writeParticles() {
+    for (let i = 0; i < P_COUNT; i++) {
+      const p = parts[i], o = i * 8;
+      const lf = p.on ? Math.max(p.life / p.maxLife, 0) : 0;
+      const a = p.on ? Math.pow(Math.sin(Math.PI * Math.min(Math.max(lf, 0), 1)), 0.7) * 0.55 : 0;
+      P[o] = p.x; P[o+1] = p.on ? p.y : -99; P[o+2] = p.z;
+      P[o+3] = p.size * (0.7 + 0.6 * (1 - lf));
+      P[o+4] = a; P[o+5] = p.seed; P[o+6] = 0; P[o+7] = 0;
+    }
+    device.queue.writeBuffer(partBuf, 0, P);
+  }
+
+  function writeAllUniformsFn(wt, now) {
+    const L = LEVELS[game.level];
+    const sun = sunForLevel(L);
+    const w = canvas.width, hgt = canvas.height;
+    const tanH = Math.tan((60 * Math.PI / 180) / 2);
+    U[0] = wt; U[1] = w; U[2] = hgt; U[3] = L.exposure;
+    U[4] = cam.pos[0]; U[5] = cam.pos[1]; U[6] = cam.pos[2]; U[7] = 0;
+    U[8] = cam.fwd[0]; U[9] = cam.fwd[1]; U[10] = cam.fwd[2]; U[11] = 0;
+    U[12] = cam.right[0]; U[13] = cam.right[1]; U[14] = cam.right[2]; U[15] = 0;
+    U[16] = cam.up[0]; U[17] = cam.up[1]; U[18] = cam.up[2]; U[19] = 0;
+    U[20] = sun.dir[0]; U[21] = sun.dir[1]; U[22] = sun.dir[2]; U[23] = 0;
+    U[24] = sun.col[0]; U[25] = sun.col[1]; U[26] = sun.col[2]; U[27] = (now * 0.001) % 7;
+    U[28] = tanH; U[29] = w / hgt; U[30] = L.foam; U[31] = MAXH;
+    const wa = SUN_AZ - 12 * Math.PI / 180;
+    U[32] = Math.cos(wa); U[33] = Math.sin(wa); U[34] = 1; U[35] = SRGB_OUT ? 1 : 0;
+    U[36] = 0.014; U[37] = 0.30; U[38] = 0; U[39] = 0;
+    device.queue.writeBuffer(uniBuf, 0, U);
+    // mesh uniforms
+    mat4Look(_view, cam.pos, cam.fwd, cam.right, cam.up);
+    mat4Persp(_proj, tanH, w / hgt, 0.3, 1500);
+    mat4Mul(_vp, _proj, _view);
+    MU.set(_vp, 0);
+    MU[16] = cam.pos[0]; MU[17] = cam.pos[1]; MU[18] = cam.pos[2]; MU[19] = 0;
+    MU[20] = cam.fwd[0]; MU[21] = cam.fwd[1]; MU[22] = cam.fwd[2]; MU[23] = 0;
+    MU[24] = sun.dir[0]; MU[25] = sun.dir[1]; MU[26] = sun.dir[2]; MU[27] = 0;
+    MU[28] = sun.col[0]; MU[29] = sun.col[1]; MU[30] = sun.col[2]; MU[31] = 0;
+    MU[32] = L.fog[0]; MU[33] = L.fog[1]; MU[34] = L.fog[2];
+    MU[35] = game.level === 3 ? 0.0032 : 0.0016;
+    MU[36] = L.exposure; MU[37] = wt; MU[38] = 0; MU[39] = 0;
+    device.queue.writeBuffer(muBuf, 0, MU);
+  }
+  writeAllUniforms = writeAllUniformsFn;
+
+  /* ---------------- UI wiring ---------------- */
+  el('b-start').addEventListener('click', confirmUI);
+  el('b-next').addEventListener('click', confirmUI);
+  el('b-retry').addEventListener('click', confirmUI);
+  el('b-again').addEventListener('click', confirmUI);
+
+  /* ---------------- main loop ---------------- */
+  resize();
+  console.log('stage: pipelines ok, entering loop');
+  // snap camera behind boat for title
+  game.boat.py = waveH(0, 0, 2);
+  cam.pos = [-14, 6, 0];
+  let simTime = 2.0, last = performance.now(), lastCount = -1;
+  const rbCtx = READBACK ? rbCanvas.getContext('2d') : null;
+  let rbImg = null;
+  if (AUTODRIVE) { setTimeout(() => { startLevel(START_LEVEL); }, 500); }
+
+  function autodriveInp() {
+    const b = game.boat, g = game.gates[Math.min(game.gate, game.gates.length - 1)];
+    const tx = g.cx + 25, tz = g.cz; // aim past the gate
+    const want = Math.atan2(tz - b.z, tx - b.x);
+    let d = want - b.h;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return { thr: Math.abs(d) > 0.75 ? 0.35 : 1.0, rud: Math.max(-1, Math.min(1, d * 2.4)), brake: false };
+  }
+
+  async function frame(now) {
+    try {
+    const dt = Math.min((now - last) / 1000, 0.1); last = now;
+    const paused = game.state === GS.PAUSE;
+    if (!paused && FREEZE_T === null) simTime += dt;
+    const wt = FREEZE_T !== null ? FREEZE_T : simTime;
+    curWt = wt;
+    const inp = AUTODRIVE && game.state === GS.RACE ? autodriveInp() : inputState();
+
+    if (!paused && (game.state === GS.RACE || game.state === GS.COUNT)) {
+      physAcc += dt;
+      let n = 0;
+      while (physAcc >= P_DT && n < 16) {
+        if (game.state === GS.RACE) stepPhysics(P_DT, wt, inp);
+        physAcc -= P_DT; n++;
+      }
+      if (n === 16) physAcc = 0;
+      if (game.state === GS.COUNT) {
+        game.countT -= dt;
+        const cnum = el('countnum');
+        const c = Math.ceil(game.countT);
+        if (c !== lastCount && c > 0) { cnum.textContent = c; AudioSys.beep(false); lastCount = c; }
+        if (game.countT <= 0) { setState(GS.RACE); toast('GO!', 1.0); AudioSys.beep(true); }
+      }
+    }
+    if (game.state === GS.TITLE) {
+      // slow showcase orbit around the start boat
+      const a = wt * 0.12;
+      const bx = game.boat.x, bz = game.boat.z;
+      cam.pos[0] = bx + Math.cos(a) * 16; cam.pos[2] = bz + Math.sin(a) * 16;
+      cam.pos[1] = waveH(cam.pos[0], cam.pos[2], wt) + 5;
+      const fw = [bx - cam.pos[0], 1.5 - cam.pos[1] + waveH(bx, bz, wt), bz - cam.pos[2]];
+      const fl = Math.hypot(fw[0], fw[1], fw[2]) || 1;
+      cam.fwd = [fw[0]/fl, fw[1]/fl, fw[2]/fl];
+      let rt = cross(cam.fwd, [0, 1, 0]);
+      const rl = Math.hypot(rt[0], rt[1], rt[2]) || 1;
+      cam.right = [rt[0]/rl, rt[1]/rl, rt[2]/rl];
+      cam.up = cross(cam.right, cam.fwd);
+      game.boat.py = waveH(bx, bz, wt);
+    } else {
+      updateCamera(dt, wt);
+    }
+    if (!paused) { stepParticles(Math.min(dt, 0.05), wt); stepWake(dt, wt); }
+    AudioSys.engine(game.boat.thr, game.state === GS.RACE);
+    if (game.toastT > 0) {
+      game.toastT -= dt;
+      if (game.toastT <= 0) el('toast').style.opacity = 0;
+    }
+
+    const meshCount = rebuildMeshes(wt);
+    const fxCount = rebuildFx(wt);
+
+    writeAllUniformsFn(wt, now);
+    writeParticles();
+
+    const encoder = device.createCommandEncoder();
+    const colorView = READBACK ? colorTex.createView() : ctx.getCurrentTexture().createView();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{ view: colorView, loadOp: 'clear', clearValue: [0.02, 0.03, 0.05, 1], storeOp: 'store' }],
+      depthStencilAttachment: { view: depthView, depthClearValue: 1.0, depthLoadOp: 'clear', depthStoreOp: 'store' },
+    });
+    pass.setPipeline(mainPipe);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(3);
+    if (meshCount > 0) {
+      pass.setPipeline(meshPipe);
+      pass.setBindGroup(0, meshBG);
+      pass.setVertexBuffer(0, meshVB);
+      pass.draw(meshCount);
+    }
+    if (fxCount > 0) {
+      pass.setPipeline(fxPipe);
+      pass.setBindGroup(0, meshBG);
+      pass.setVertexBuffer(0, fxVB);
+      pass.draw(fxCount);
+    }
+    pass.setPipeline(sprayPipe);
+    pass.setVertexBuffer(0, quadBuf);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(6, P_COUNT);
+    pass.end();
+    if (READBACK) {
+      encoder.copyTextureToBuffer({ texture: colorTex },
+        { buffer: readBuf, bytesPerRow: PITCH }, [canvas.width, canvas.height]);
+    }
+    device.queue.submit([encoder.finish()]);
+
+    if (READBACK) {
+      await readBuf.mapAsync(GPUMapMode.READ);
+      const src = new Uint8Array(readBuf.getMappedRange());
+      if (!rbImg) rbImg = rbCtx.createImageData(canvas.width, canvas.height);
+      const dst = rbImg.data, rowBytes = canvas.width * 4;
+      for (let y = 0; y < canvas.height; y++) dst.set(src.subarray(y * PITCH, y * PITCH + rowBytes), y * rowBytes);
+      readBuf.unmap();
+      rbCtx.putImageData(rbImg, 0, 0);
+    }
+    window.__frames++;
+    if (game.state !== GS.TITLE) updateHUD(wt);
+    } catch (e) { console.error('frame error', e); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})().catch(err => {
+  console.error(err);
+  document.getElementById('nogl').classList.add('show');
+});
+</script>
+</body>
+</html>
