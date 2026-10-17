@@ -53,6 +53,25 @@
   #nogl { display:none; position:fixed; inset:0; z-index:20; align-items:center; justify-content:center;
     text-align:center; background:#04070c; color:#cfd8e3; font-size:15px; line-height:1.7; padding:40px; }
   #nogl.show { display:flex; }
+  /* ---- environment control panel ---- */
+  #uibtn { position:fixed; top:12px; right:14px; z-index:6; width:34px; height:34px;
+    border-radius:9px; border:1px solid rgba(255,255,255,.12); background:rgba(10,14,20,.66);
+    color:#dfe7ef; font-size:15px; cursor:pointer; backdrop-filter:blur(10px); }
+  #uibtn:hover { background:rgba(30,40,55,.8); }
+  #panel { position:fixed; top:54px; right:14px; width:238px; z-index:6;
+    background:rgba(8,12,18,.74); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
+    border:1px solid rgba(255,255,255,.10); border-radius:13px; color:#dfe7ef;
+    font:11px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif;
+    padding:10px 12px 12px; user-select:none; box-shadow:0 8px 30px rgba(0,0,0,.45); }
+  #panel.hidden { display:none; }
+  #phead { display:flex; align-items:center; gap:8px; margin-bottom:2px; }
+  .ptitle { font-size:10px; letter-spacing:.18em; color:rgba(255,255,255,.55); flex:1; }
+  #phide { background:none; border:none; color:rgba(255,255,255,.5); font-size:14px; cursor:pointer; padding:0 2px; }
+  .psec { margin:9px 0 3px; font-size:9px; letter-spacing:.16em; color:rgba(255,255,255,.40); }
+  .prow { display:grid; grid-template-columns:1fr auto; align-items:center; gap:2px 8px; margin:3px 0; }
+  .prow label { color:rgba(223,231,239,.85); }
+  .pval { font-variant-numeric:tabular-nums; color:#9fd8ff; font-size:10px; }
+  .prow input[type=range] { grid-column:1/-1; width:100%; margin:1px 0 2px; accent-color:#7fd4ff; height:14px; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -63,6 +82,11 @@
 <div class="hud" id="toast"></div>
 <div class="hud" id="gatemark" style="display:none">GATE <span id="gmn">1</span> <span class="d" id="gmd"></span></div>
 <div class="hud" id="wrongway">⚠ WRONG WAY</div>
+<button id="uibtn" title="environment controls (H)">☰</button>
+<div id="panel" class="hidden">
+  <div id="phead"><span class="ptitle">ENVIRONMENT</span><button id="phide">–</button></div>
+  <div id="pbody"></div>
+</div>
 
 <div class="screen" id="s-title">
   <h1 class="gtitle">BUOY RACER 3D</h1>
@@ -738,8 +762,37 @@ function buildWaves(scale) {
   }
   MAXH = WAVES.reduce((s, w) => s + w.amp, 0);
 }
-// JS wave sample WITH the shader's wander + short-crested modulation
-// (skips group fbm + crest shaping: sub-boat-scale detail). Returns h.
+// JS ports of the shader's hash/vnoise/fbm (for wave-group modulation)
+function frac(x) { return x - Math.floor(x); }
+function hash12(px, py) {
+  // WGSL: fract(vec3f(p.xyx) * 0.1031)
+  let p3x = frac(px * 0.1031), p3y = frac(py * 0.1031), p3z = frac(px * 0.1031);
+  // WGSL: p3 += dot(p3, p3.yzx + 33.33)
+  const d = p3x * (p3y + 33.33) + p3y * (p3z + 33.33) + p3z * (p3x + 33.33);
+  p3x += d; p3y += d; p3z += d;
+  // WGSL: fract((p3.x + p3.y) * p3.z)
+  return frac((p3x + p3y) * p3z);
+}
+function vnoise(px, py) {
+  const ix = Math.floor(px), iy = Math.floor(py);
+  const fx = px - ix, fy = py - iy;
+  const wx = fx * fx * fx * (fx * (fx * 6 - 15) + 10);
+  const wy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+  const a = hash12(ix, iy), b = hash12(ix + 1, iy);
+  const c = hash12(ix, iy + 1), d = hash12(ix + 1, iy + 1);
+  return (a + (b - a) * wx) + ((c + (d - c) * wx) - (a + (b - a) * wx)) * wy;
+}
+function fbm2(px, py) {
+  let v = 0, a = 0.5, qx = px, qy = py;
+  for (let i = 0; i < 4; i++) {
+    v += a * vnoise(qx, qy);
+    qx = qx * 2.03 + 17.3; qy = qy * 2.03 + 9.1;
+    a *= 0.5;
+  }
+  return v;
+}
+// JS wave sample: EXACT mirror of the shader's oceanHeightFull
+// (13 waves + wander + short-crested + group fbm + crest shaping). Returns h.
 function waveH(x, z, t) {
   const sc1 = Math.sin(x * 0.061 + z * 0.043 + t * 0.11);
   const sc2 = Math.sin(-x * 0.052 + z * 0.071 - t * 0.073);
@@ -762,6 +815,13 @@ function waveH(x, z, t) {
     }
     h += amp * ampW * Math.sin(f);
   }
+  // wave groups: slow spatial modulation (matches oceanHeightFull)
+  const group = 0.70 + 0.60 * fbm2(x * 0.006 + t * 0.018, z * 0.006 - t * 0.011);
+  h *= group;
+  // crest sharpening: narrower peaks, flatter troughs (matches oceanHeightFull)
+  const cn = Math.max(-1, Math.min(1, h / Math.max(MAXH, 1e-3)));
+  const shaped = Math.sign(cn) * Math.pow(Math.abs(cn), 1.18);
+  h = shaped * MAXH;
   return h;
 }
 function waveGrad(x, z, t) {  // finite-difference gradient + height
@@ -835,6 +895,7 @@ window.addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'KeyM') toast(AudioSys.toggleMute() ? 'MUTED' : 'SOUND ON');
   if (e.code === 'KeyP') togglePause();
+  if (e.code === 'KeyH') togglePanel();
   if (e.code === 'Enter') confirmUI();
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
@@ -987,12 +1048,67 @@ const boatVerts = buildBoat();
 const buoyVerts = buildBuoy();
 
 function sunForLevel(L) {
-  const el = L.sunEl * Math.PI / 180;
-  const dir = [Math.cos(el) * Math.cos(SUN_AZ), Math.sin(el), Math.cos(el) * Math.sin(SUN_AZ)];
+  const el = (env.sunEl !== undefined ? env.sunEl : L.sunEl) * Math.PI / 180;
+  const az = (env.sunAz !== undefined ? env.sunAz : 205) * Math.PI / 180;
+  const dir = [Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az)];
   // warm color follows elevation: low sun = orange
-  const w = Math.max(0, Math.min(1, (L.sunEl - 6) / 30));
+  const sunElV = env.sunEl !== undefined ? env.sunEl : L.sunEl;
+  const w = Math.max(0, Math.min(1, (sunElV - 6) / 30));
   const col = [1.0, 0.62 + 0.30 * w, 0.38 + 0.42 * w];
   return { dir, col };
+}
+
+// live environment overrides (set by control panel; reset per level)
+const env = {};
+function resetEnv(L) {
+  env.sunEl = L.sunEl; env.sunAz = 205; env.exposure = L.exposure;
+  env.waveScale = L.waveScale; env.foam = L.foam;
+  env.timeScale = 1.0; env.fov = 60;
+}
+// effective value: env override or level default
+function ev(name, L) { return env[name] !== undefined ? env[name] : L[name]; }
+
+/* ---------------- environment control panel ---------------- */
+const PANEL_DEFS = [
+  { key: 'sunEl', label: 'Sun elevation', min: 2, max: 85, step: 1, fmt: v => v.toFixed(0) + '°' },
+  { key: 'sunAz', label: 'Sun azimuth', min: 0, max: 360, step: 1, fmt: v => v.toFixed(0) + '°' },
+  { key: 'exposure', label: 'Exposure', min: 0.5, max: 1.8, step: 0.01, fmt: v => v.toFixed(2) },
+  { key: 'waveScale', label: 'Wave scale', min: 0.4, max: 2.2, step: 0.05, fmt: v => v.toFixed(2) },
+  { key: 'foam', label: 'Foam amount', min: 0, max: 2.5, step: 0.05, fmt: v => v.toFixed(2) },
+  { key: 'timeScale', label: 'Time scale', min: 0, max: 2, step: 0.05, fmt: v => v.toFixed(2) + '×' },
+  { key: 'fov', label: 'FOV', min: 35, max: 110, step: 1, fmt: v => v.toFixed(0) + '°' },
+];
+function buildPanel() {
+  const body = document.getElementById('pbody');
+  if (!body || body.children.length) return;
+  for (const d of PANEL_DEFS) {
+    const row = document.createElement('div');
+    row.className = 'prow';
+    row.innerHTML = `<label>${d.label}</label><span class="pval" id="pv-${d.key}"></span>
+      <input type="range" id="ps-${d.key}" min="${d.min}" max="${d.max}" step="${d.step}">`;
+    body.appendChild(row);
+    const slider = row.querySelector('input');
+    slider.addEventListener('input', () => {
+      const v = parseFloat(slider.value);
+      env[d.key] = v;
+      document.getElementById('pv-' + d.key).textContent = d.fmt(v);
+      if (d.key === 'waveScale') { buildWaves(v); uploadWaves(); }
+    });
+  }
+  document.getElementById('uibtn').addEventListener('click', togglePanel);
+  document.getElementById('phide').addEventListener('click', togglePanel);
+}
+function syncPanel() {
+  const body = document.getElementById('pbody');
+  if (!body) return;
+  for (const d of PANEL_DEFS) {
+    const s = document.getElementById('ps-' + d.key), v = document.getElementById('pv-' + d.key);
+    if (s && env[d.key] !== undefined) { s.value = env[d.key]; if (v) v.textContent = d.fmt(env[d.key]); }
+  }
+}
+function togglePanel() {
+  const p = document.getElementById('panel');
+  if (p) p.classList.toggle('hidden');
 }
 
 // deterministic course: weaving gates ahead of start
@@ -1033,6 +1149,7 @@ function startLevel(idx) {
   L.par3 = courseLen / 13.5; L.par2 = courseLen / 10.0;
   game.limit = courseLen / 5.5;
   buildWaves(L.waveScale); uploadWaves();
+  resetEnv(L); syncPanel();
   wake.samples.length = 0;
   setState(GS.COUNT); game.countT = 3.6;
   document.getElementById('gateinfo').textContent = `GATE 0/${L.gates}`;
@@ -1254,7 +1371,7 @@ function stepWake(dt, wt) {
     if (wake.samples.length > 90) wake.samples.shift();
   }
   for (const s of wake.samples) s.age += dt;
-  while (wake.samples.length && wake.samples[0].age > 5.5) wake.samples.shift();
+  while (wake.samples.length && wake.samples[0].age > 4.0) wake.samples.shift();
 }
 function buildWakeVerts(dst, doff, wt) {
   // returns vertex count; each sample -> 2 verts (left/right)
@@ -1584,8 +1701,8 @@ let device, uploadWaves, writeAllUniforms;
     const tmp = [];
     for (let i = 0; i < n; i++) {
       const s = wake.samples[i];
-      const wdt = Math.min(0.9 + s.age * 1.1, 3.4);
-      const alpha = 0.40 * Math.max(0, 1 - s.age / 5.5);
+      const wdt = Math.min(0.55 + s.age * 0.55, 2.0);
+      const alpha = 0.22 * Math.max(0, 1 - s.age / 4.0);
       const px = -s.fz, pz = s.fx;
       const lx = s.x + px * wdt - s.fx * 1.2, lz = s.z + pz * wdt - s.fz * 1.2;
       const rx = s.x - px * wdt - s.fx * 1.2, rz = s.z - pz * wdt - s.fz * 1.2;
@@ -1646,16 +1763,16 @@ let device, uploadWaves, writeAllUniforms;
     const L = LEVELS[game.level];
     const sun = sunForLevel(L);
     const w = canvas.width, hgt = canvas.height;
-    const tanH = Math.tan((60 * Math.PI / 180) / 2);
-    U[0] = wt; U[1] = w; U[2] = hgt; U[3] = L.exposure;
+    const tanH = Math.tan((ev('fov', L) * Math.PI / 180) / 2);
+    U[0] = wt; U[1] = w; U[2] = hgt; U[3] = ev('exposure', L);
     U[4] = cam.pos[0]; U[5] = cam.pos[1]; U[6] = cam.pos[2]; U[7] = 0;
     U[8] = cam.fwd[0]; U[9] = cam.fwd[1]; U[10] = cam.fwd[2]; U[11] = 0;
     U[12] = cam.right[0]; U[13] = cam.right[1]; U[14] = cam.right[2]; U[15] = 0;
     U[16] = cam.up[0]; U[17] = cam.up[1]; U[18] = cam.up[2]; U[19] = 0;
     U[20] = sun.dir[0]; U[21] = sun.dir[1]; U[22] = sun.dir[2]; U[23] = 0;
     U[24] = sun.col[0]; U[25] = sun.col[1]; U[26] = sun.col[2]; U[27] = (now * 0.001) % 7;
-    U[28] = tanH; U[29] = w / hgt; U[30] = L.foam; U[31] = MAXH;
-    const wa = SUN_AZ - 12 * Math.PI / 180;
+    U[28] = tanH; U[29] = w / hgt; U[30] = ev('foam', L); U[31] = MAXH;
+    const wa = (ev('sunAz', L) - 12) * Math.PI / 180;
     U[32] = Math.cos(wa); U[33] = Math.sin(wa); U[34] = 1; U[35] = SRGB_OUT ? 1 : 0;
     U[36] = 0.014; U[37] = 0.30; U[38] = 0; U[39] = 0;
     device.queue.writeBuffer(uniBuf, 0, U);
@@ -1670,7 +1787,7 @@ let device, uploadWaves, writeAllUniforms;
     MU[28] = sun.col[0]; MU[29] = sun.col[1]; MU[30] = sun.col[2]; MU[31] = 0;
     MU[32] = L.fog[0]; MU[33] = L.fog[1]; MU[34] = L.fog[2];
     MU[35] = game.level === 3 ? 0.0032 : 0.0016;
-    MU[36] = L.exposure; MU[37] = wt; MU[38] = 0; MU[39] = 0;
+    MU[36] = ev('exposure', L); MU[37] = wt; MU[38] = 0; MU[39] = 0;
     device.queue.writeBuffer(muBuf, 0, MU);
   }
   writeAllUniforms = writeAllUniformsFn;
@@ -1706,7 +1823,7 @@ let device, uploadWaves, writeAllUniforms;
     try {
     const dt = Math.min((now - last) / 1000, 0.1); last = now;
     const paused = game.state === GS.PAUSE;
-    if (!paused && FREEZE_T === null) simTime += dt;
+    if (!paused && FREEZE_T === null) simTime += dt * (env.timeScale !== undefined ? env.timeScale : 1);
     const wt = FREEZE_T !== null ? FREEZE_T : simTime;
     curWt = wt;
     const inp = AUTODRIVE && game.state === GS.RACE ? autodriveInp() : inputState();
@@ -1803,6 +1920,8 @@ let device, uploadWaves, writeAllUniforms;
     } catch (e) { console.error('frame error', e); }
     requestAnimationFrame(frame);
   }
+  buildPanel();
+  resetEnv(LEVELS[0]); syncPanel();
   requestAnimationFrame(frame);
 })().catch(err => {
   console.error(err);
