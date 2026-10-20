@@ -45,17 +45,3 @@ Exports: `setParam`/`getParam`/`getParamTarget` (11 params: sunEl, sunAz, exposu
 - `NOTES.md` has the headless SwiftShader test recipe and the critique-round log from development.
 
 Built from scratch with Muse. The wave field slowly evolves on incommensurate cycles, so the sea never visibly repeats.
-
----
-
-## 🏁 3D Boat Racer (`boat-racing-3d.html`)
-
-A 3D buoy-slalom racing game built **on top of this ocean renderer** — same water, sky and sun, plus a drivable 3D speedboat.
-
-- **Boat physics:** throttle/rudder, water drag, wave push and currents; the hull rides the exact rendered swell (CPU mirror of the shader's wave function), pitching and rolling over waves
-- **Buoy gates:** ordered red/white gate pairs across 4 levels (Calm Bay → River Run → Open Sea → Storm), with a next-gate arrow, minimap, par times and 3-star ratings
-- **Effects:** bow spray when slamming wave faces, wake trail, buoy collisions with splash and screen shake
-- **Environment panel:** press `H` for live sliders (sun, waves, foam, exposure, FOV) — same controls as the ocean scene
-- **Controls:** `WASD`/arrows to drive, `P` pause, `M` mute
-
-Open `boat-racing-3d.html` in a WebGPU-capable browser (Chrome/Edge 113+) and race.
