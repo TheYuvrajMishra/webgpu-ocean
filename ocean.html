@@ -82,7 +82,7 @@ const CFG = {
   driftSpeed      : 1.15,    // forward drift (m/s)
   timeScale       : 1.0,
   sprayCount      : 240,     // billboard spray particles
-  grain           : 0.014,   // film grain strength
+  grain           : 0.006,   // film grain strength (0.014 read as sandpaper stipple at review res)
   vignette        : 0.30,
   fovDeg          : 55,
 };
@@ -168,9 +168,9 @@ const PARAMS = [
 ];
 /* preset values in param-id order: el az exp wave foam camH drift time grain vig fov */
 const PRESETS = {
-  'Midday':      [55, 205, 1.00, 1.0, 0.8, 3.1, 1.15, 1.0, 0.014, 0.30, 55],
-  'Golden hour': [14, 205, 1.10, 1.0, 1.0, 3.1, 1.15, 1.0, 0.014, 0.30, 55],
-  'Storm':       [22, 190, 0.95, 1.6, 2.0, 4.2, 2.40, 1.2, 0.020, 0.38, 58],
+  'Midday':      [55, 205, 1.00, 1.0, 0.8, 3.1, 1.15, 1.0, 0.006, 0.30, 55],
+  'Golden hour': [14, 205, 1.10, 1.0, 1.0, 3.1, 1.15, 1.0, 0.006, 0.30, 55],
+  'Storm':       [22, 190, 0.95, 1.6, 2.0, 4.2, 2.40, 1.2, 0.009, 0.38, 58],
 };
 let wasm = null, wasmLive = false;
 let lastBuiltScale = CFG.waveScale, renderScale = 1, autoQ = true;
@@ -399,136 +399,17 @@ fn pcg2d(p: vec2i) -> f32 {
   return f32(v) * (1.0 / 4294967295.0);
 }
 
-/* ---------- ocean heightfield ---------- */
-// Cheap version for the raymarch loop (plain sine sum; groups/shaping are
-// cm-scale and only applied in the shading evaluation below).
-fn oceanHeightMarch(p: vec2f, t: f32, dist: f32) -> f32 {
-  var h: f32 = 0.0;
-  // short-crested modulation for the wind-sea components (indices >= 5):
-  // breaks the endless parallel lines into natural crest segments
-  let sc1 = sin(dot(p, vec2f(0.061, 0.043)) + t * 0.11);
-  let sc2 = sin(dot(p, vec2f(-0.052, 0.071)) - t * 0.073);
-  for (var i: u32 = 0u; i < NW; i++) {
-    let w = waves[i];
-    let kd = w.k * dist / 700.0;
-    let fade = 1.0 / (1.0 + kd * kd);
-    var amp = w.amp;
-    if (i >= 5u) {
-      let sci = 0.82 + 0.18 * sc1 * sc2
-              * sin(f32(i) * 2.39) * sin(f32(i) * 1.31 + 0.7);
-      amp *= clamp(sci, 0.65, 1.0);
-    }
-    // slow sea-state evolution: incommensurate breathing of amplitude and
-    // phase so the wave field never visibly repeats
-    let wob = f32(i) + 1.0;
-    let ampW = 1.0 + 0.30 * sin(t * 0.023 * wob + f32(i) * 2.39)
-                         * sin(t * 0.011 * (wob + 1.0) + f32(i) * 1.71);
-    var f = w.k * dot(w.dir, p) - w.omega * t + w.phase
-          + 0.9 * sin(t * 0.019 * wob + f32(i) * 4.13);
-    if (i >= 5u) {
-      f += 0.7 * sin(dot(p, vec2f(0.19, 0.11)) + f32(i) * 1.7 + t * 0.21)
-              * sin(dot(p, vec2f(-0.13, 0.17)) - t * 0.13 + f32(i) * 0.9);
-    }
-    h += amp * fade * ampW * sin(f);
-  }
-  return h;
-}
-// Full version for shading: height + crest factor + chop, with wave-group
-// modulation (low-freq fbm swells/ebbs the whole field) and crest sharpening.
-fn oceanHeightFull(p: vec2f, t: f32, dist: f32) -> vec3f {
-  var h: f32 = 0.0; var chop: f32 = 0.0; var chopN: f32 = 0.0;
-  let sc1 = sin(dot(p, vec2f(0.061, 0.043)) + t * 0.11);
-  let sc2 = sin(dot(p, vec2f(-0.052, 0.071)) - t * 0.073);
-  for (var i: u32 = 0u; i < NW; i++) {
-    let w = waves[i];
-    let kd = w.k * dist / 700.0;
-    let fade = 1.0 / (1.0 + kd * kd);
-    var amp = w.amp;
-    if (i >= 5u) {
-      let sci = 0.82 + 0.18 * sc1 * sc2
-              * sin(f32(i) * 2.39) * sin(f32(i) * 1.31 + 0.7);
-      amp *= clamp(sci, 0.65, 1.0);
-    }
-    // slow sea-state evolution: incommensurate breathing of amplitude and
-    // phase so the wave field never visibly repeats
-    let wob = f32(i) + 1.0;
-    let ampW = 1.0 + 0.30 * sin(t * 0.023 * wob + f32(i) * 2.39)
-                         * sin(t * 0.011 * (wob + 1.0) + f32(i) * 1.71);
-    var f = w.k * dot(w.dir, p) - w.omega * t + w.phase
-          + 0.9 * sin(t * 0.019 * wob + f32(i) * 4.13);
-    if (i >= 5u) {
-      f += 0.7 * sin(dot(p, vec2f(0.19, 0.11)) + f32(i) * 1.7 + t * 0.21)
-              * sin(dot(p, vec2f(-0.13, 0.17)) - t * 0.13 + f32(i) * 0.9);
-    }
-    h += amp * fade * ampW * sin(f);
-    chop += w.steep * fade * ampW * cos(f); chopN += w.steep * fade;
-  }
-  // wave groups: slow spatial modulation of the whole sea state
-  let group = 0.70 + 0.60 * fbm(p * 0.006 + vec2f(t * 0.018, -t * 0.011));
-  h *= group;
-  // crest sharpening: narrower peaks, flatter troughs
-  let cn = clamp(h / max(u.maxH, 1e-3), -1.0, 1.0);
-  let shaped = sign(cn) * pow(abs(cn), 1.18);
-  h = shaped * u.maxH;
-  // crest factor normalized by a realistic large crest (2.5m), not the
-  // theoretical MAXH sum (which never occurs and would suppress foam)
-  let crest = clamp(h / 2.5, 0.0, 1.0);
-  return vec3f(h, crest, chop / max(chopN, 1e-4));
-}
-fn oceanHeight(p: vec2f, t: f32, dist: f32, detailFade: f32) -> f32 {
-  return oceanHeightMarch(p, t, dist);
-}
-fn oceanNormal(p: vec2f, t: f32, dist: f32) -> vec3f {
-  var gx: f32 = 0.0; var gz: f32 = 0.0;
-  let sc1 = sin(dot(p, vec2f(0.061, 0.043)) + t * 0.11);
-  let sc2 = sin(dot(p, vec2f(-0.052, 0.071)) - t * 0.073);
-  for (var i: u32 = 0u; i < NW; i++) {
-    let w = waves[i];
-    let kd = w.k * dist / 700.0;
-    let fade = 1.0 / (1.0 + kd * kd);
-    var amp = w.amp;
-    if (i >= 5u) {
-      let sci = 0.82 + 0.18 * sc1 * sc2
-              * sin(f32(i) * 2.39) * sin(f32(i) * 1.31 + 0.7);
-      amp *= clamp(sci, 0.65, 1.0);
-    }
-    // slow sea-state evolution: incommensurate breathing of amplitude and
-    // phase so the wave field never visibly repeats
-    let wob = f32(i) + 1.0;
-    let ampW = 1.0 + 0.30 * sin(t * 0.023 * wob + f32(i) * 2.39)
-                         * sin(t * 0.011 * (wob + 1.0) + f32(i) * 1.71);
-    var f = w.k * dot(w.dir, p) - w.omega * t + w.phase
-          + 0.9 * sin(t * 0.019 * wob + f32(i) * 4.13);
-    if (i >= 5u) {
-      f += 0.7 * sin(dot(p, vec2f(0.19, 0.11)) + f32(i) * 1.7 + t * 0.21)
-              * sin(dot(p, vec2f(-0.13, 0.17)) - t * 0.13 + f32(i) * 0.9);
-    }
-    let d = amp * w.k * fade * ampW * cos(f);
-    gx += w.dir.x * d; gz += w.dir.y * d;
-  }
-  // organic fine detail from noise gradients (2 octaves) — no directional bias,
-  // so the near field reads as water texture, not pond ripples
-  let df = exp(-dist / 10.0);
-  if (df > 0.01) {
-    let e1: f32 = 0.09;
-    let t1 = t * 0.6;
-    let o1 = vec2f(t1, -t1 * 0.7);
-    let b0 = vnoise(p * 6.0 + o1);
-    let bx = vnoise((p + vec2f(e1, 0.0)) * 6.0 + o1);
-    let bz = vnoise((p + vec2f(0.0, e1)) * 6.0 + o1);
-    gx += (bx - b0) / e1 * 0.030 * df;
-    gz += (bz - b0) / e1 * 0.030 * df;
-    let e2: f32 = 0.045;
-    let t2 = t * 0.9;
-    let o2 = vec2f(-t2 * 0.8, t2);
-    let c0 = vnoise(p * 13.0 + o2);
-    let cx = vnoise((p + vec2f(e2, 0.0)) * 13.0 + o2);
-    let cz = vnoise((p + vec2f(0.0, e2)) * 13.0 + o2);
-    gx += (cx - c0) / e2 * 0.012 * df;
-    gz += (cz - c0) / e2 * 0.012 * df;
-  }
-  return normalize(vec3f(-gx, 1.0, -gz));
-}
+/* ---------- FFT cascade field textures (written by compute) ---------- */
+@group(1) @binding(0) var fftD0: texture_2d<f32>;
+@group(1) @binding(1) var fftH0: texture_2d<f32>;
+@group(1) @binding(2) var fftD1: texture_2d<f32>;
+@group(1) @binding(3) var fftH1: texture_2d<f32>;
+@group(1) @binding(4) var fftD2: texture_2d<f32>;
+@group(1) @binding(5) var fftH2: texture_2d<f32>;
+// cascade tile sizes (m) — mirror FFT_L in the JS FFT setup
+const LC0: f32 = 997.0;
+const LC1: f32 = 251.0;
+const LC2: f32 = 61.0;
 
 /* ---------- sky: Rayleigh + Mie single scatter ---------- */
 fn skyColor(rd: vec3f) -> vec3f {
@@ -563,7 +444,6 @@ fn skyColor(rd: vec3f) -> vec3f {
     let dR = exp(-h / Hr) * dt;
     let dM = exp(-h / Hm) * dt;
     odR += dR; odM += dM;
-    // optical depth from sample point toward the sun (scale-height approx)
     let cosSun = dot(p / max(length(p), 1e-3), sunDir);
     let sDenom = max(cosSun, 0.03);
     let odSunR = exp(-h / Hr) * Hr / sDenom;
@@ -575,176 +455,47 @@ fn skyColor(rd: vec3f) -> vec3f {
   }
   var col = (sumR * betaR * phaseR + vec3f(betaM) * sumM * phaseM) * sunI;
 
-  // approximate multiple scattering: lifts the murky single-scatter brown
-  // that appears at the horizon away from the sun
-  // uniform horizon wash: guarantees a smooth strip with no terminator line
   let horizF = pow(clamp(1.0 - abs(rd.y) * 4.5, 0.0, 1.0), 3.0);
   let warmF = clamp(mu * 0.5 + 0.5, 0.0, 1.0);
   let ambCol = mix(vec3f(0.42, 0.52, 0.62), vec3f(0.75, 0.62, 0.48), warmF * warmF);
   col = mix(col, ambCol * (0.50 + 0.90 * warmF), horizF * 0.60);
 
-  // sun disk with limb darkening + tight warm corona
-  let cosSunR: f32 = 0.9999733;                       // ~0.42 deg radius
-  let disk = smoothstep(0.9999728, 0.9999733, mu);     // hard limb
+  let cosSunR: f32 = 0.9999733;
+  let disk = smoothstep(0.9999728, 0.9999733, mu);
   let limb = 0.55 + 0.45 * pow(clamp((mu - 0.9999715) / (cosSunR - 0.9999715), 0.0, 1.0), 0.5);
   col += u.sunColor * (38.0 * disk * limb);
   col += u.sunColor * pow(max(mu, 0.0), 3500.0) * 2.2;
   return col;
 }
 
-/* ---------- ocean raymarch ---------- */
-// returns (t, hitFlag): 0 = miss, 1 = surface hit, 2 = far flat-plane fallback
-fn traceOcean(ro: vec3f, rd: vec3f, t: f32) -> vec2f {
-  var tt: f32 = 0.5;
-  var tPrev: f32 = 0.5;
-  let tMax: f32 = 650.0;
-  var hit: f32 = 0.0;
-  for (var i: u32 = 0u; i < 70u; i++) {
-    let p = ro + rd * tt;
-    let h = oceanHeight(p.xz, t, tt, 0.0);
-    let d = p.y - h;
-    if (d < 0.012 * tt + 0.008) { hit = 1.0; break; }
-    tPrev = tt;
-    tt += max(d * 0.58, 0.02 + tt * 0.012);
-    if (tt > tMax) { break; }
-  }
-  if (hit > 0.5) {
-    var a = tPrev; var bb = tt;   // binary refinement
-    for (var j: u32 = 0u; j < 5u; j++) {
-      let m = (a + bb) * 0.5;
-      let p = ro + rd * m;
-      if (p.y - oceanHeight(p.xz, t, m, 0.0) > 0.0) { a = m; } else { bb = m; }
-    }
-    tt = (a + bb) * 0.5;
-  } else if (rd.y < -1e-4) {
-    let tp = -ro.y / rd.y;
-    if (tp > 0.0 && tp < 4000.0) { tt = tp; hit = 2.0; }
-  }
-  return vec2f(tt, hit);
-}
-
-/* ---------- water shading ---------- */
-// farF: 0 = full raymarched detail, 1 = analytic flat far field (blended by
-// distance so the horizon never shows a march hit/miss seam)
-fn shadeWater(ro: vec3f, rd: vec3f, t: f32, tt: f32, farF: f32) -> vec3f {
-  let p = ro + rd * tt;
-  let sunDir = u.sunDir;
-  let V = -rd;
-
-  var n: vec3f;
-  var crest: f32; var chop: f32; var h: f32;
-  {
-    let hf = oceanHeightFull(p.xz, t, tt);
-    h = hf.x; crest = hf.y; chop = hf.z;
-    n = oceanNormal(p.xz, t, tt);
-    // perturb with a touch of fbm for organic micro variation
-    let jf = exp(-tt / 12.0);
-    let jx = (fbm(p.xz * 2.7 + vec2f(t * 0.35, 0.0)) - 0.5) * 0.22 * jf;
-    let jz = (fbm(p.xz * 2.7 + vec2f(0.0, t * 0.30) + 7.0) - 0.5) * 0.22 * jf;
-    n = normalize(n + vec3f(jx, 0.0, jz));
-  }
-  // blend toward the analytic flat far field with distance
-  if (farF > 0.001) {
-    let frx = 0.055 * sin(p.x * 0.11 + t * 0.5) + 0.035 * sin(p.z * 0.13 - t * 0.4)
-            + 0.020 * sin(p.x * 0.31 - p.z * 0.23 + t * 0.8);
-    let frz = 0.055 * cos(p.z * 0.09 - t * 0.45) + 0.035 * cos(p.x * 0.12 + t * 0.35)
-            + 0.020 * cos(p.z * 0.27 + p.x * 0.19 - t * 0.7);
-    n = normalize(mix(n, vec3f(frx, 1.0, frz), farF));
-    crest *= 1.0 - farF; chop *= 1.0 - farF;
-  }
-
-  let ndv = max(dot(n, V), 0.0);
-  let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
-
-  var R = reflect(rd, n);
-  R.y = abs(R.y) + 1e-4;
-  let refl = skyColor(normalize(R));
-
-  // sun glitter: sparse discrete sparkles with dark water between them,
-  // plus a very restrained broad sheen
-  let g = max(dot(normalize(R), sunDir), 0.0);
-  let sp = pow(vnoise(p.xz * 23.0 + vec2f(-t * 1.1, t * 0.8)), 14.0);
-  let farGlit = 1.0 - smoothstep(120.0, 350.0, tt) * 0.60;
-  let glitter = (pow(g, 1100.0) * sp * 30.0 + pow(g, 300.0) * 0.10) * u.sunColor * farGlit;
-
-  // water body: blue-green absorption with distance, darker at grazing
-  let absorb = exp(-tt * vec3f(0.32, 0.14, 0.085));
-  let sssW = pow(clamp(dot(n, sunDir) * 0.5 + 0.5, 0.0, 1.0), 3.0);
-  var body = mix(vec3f(0.008, 0.072, 0.072), vec3f(0.030, 0.165, 0.130), sssW * clamp(crest * 1.6, 0.0, 1.0));
-  body *= (0.35 + 0.65 * absorb);
-  // subsurface glow through thin sun-facing flanks
-  let sss = sssW * smoothstep(0.25, 0.95, crest) * u.sunColor * 0.55;
-
-  /* ----- foam mask: matte whitecaps, true crests only -----
-     Domain-warped breakup advected downwind and sampled at a retarded
-     position (foam trails behind moving crests); bubble-fizz breakup and
-     eroded edges so it never reads as a flat decal. The mask also kills
-     the wet glitter inside foam — foam is diffuse, not specular.        */
-  let wind = normalize(vec2f(u.windX, u.windZ));
-  let wperp = vec2f(-wind.y, wind.x);
-  let fp = p.xz;
-  let adv  = fp - wind * t * 0.9;            // foam drifts downwind...
-  let adv2 = fp - wind * (t * 0.9 + 1.6);     // ...and lingers where crests were
-  let warp = vec2f(fbm(adv * 0.22 + vec2f(0.0, t * 0.05)),
-                   fbm(adv * 0.22 + vec2f(5.2, -t * 0.04))) - 0.5;
-  let bn   = fbm(adv * 0.55 + warp * 2.2);
-  let bn2  = fbm(adv2 * 0.55 + warp * 2.2);
-  let breakup = max(bn, bn2 * 0.72);                       // trailing foam
-  let streakN = fbm(vec2f(dot(adv, wind) * 0.07 - t * 0.22, dot(adv, wperp) * 0.33));
-  // bubble fizz: high-frequency breakup so foam reads as bubbles, not paint
-  let bub  = vnoise(fp * 43.0 + vec2f(t * 0.9, -t * 0.7));
-  let bub2 = vnoise(fp * 91.0 + vec2f(-t * 1.3, t * 1.1));
-  let fizz = bub * 0.6 + bub2 * 0.4;
-  // whitecap drive: crest height + crest sharpness (chop) — the original
-  // proven drive; chop fires on steep breaking crests, height gates the rest
-  let drive = clamp(crest * 0.65 + chop * 0.35, 0.0, 1.2);
-  var foamM = smoothstep(0.30, 0.55, drive);
-  // breakup gates shape the foam but pass ~1 in patch cores (they punch
-  // holes via the fizz/edge terms instead of dimming everything)
-  foamM *= smoothstep(0.22, 0.42, breakup * 0.72 + streakN * 0.28);
-  foamM *= smoothstep(0.18, 0.42, fizz);
-  // scattered wind-blown patches, still crest-gated
-  let patchN = fbm(adv * 0.045 + vec2f(t * 0.012, -t * 0.008));
-  let patchF = smoothstep(0.62, 0.74, patchN) * smoothstep(0.45, 0.62, crest)
-             * smoothstep(0.35, 0.60, bn) * smoothstep(0.18, 0.42, fizz);
-  foamM = clamp(foamM + patchF * 0.8, 0.0, 1.0);
-  // erode the edges with fine detail
-  let edge = fbm(fp * 2.6 + vec2f(-t * 0.5, t * 0.35));
-  foamM *= mix(0.55, 1.0, smoothstep(0.15, 0.75, edge + foamM * 0.55));
-  foamM *= u.foamAmt;
-  foamM = clamp(foamM, 0.0, 1.0);
-
-  var col = mix(body, refl, fres) + sss;
-  col += glitter * (1.0 - foamM);   // foam is diffuse: no wet glints inside it
-  if (foamM > 0.003 && farF < 0.5) {
-    // chalky matte white: flat diffuse + sky ambient, zero specular
-    let fmn = normalize(n + vec3f((bn - 0.5) * 0.9 + (edge - 0.5) * 0.5, 0.0,
-                                  (streakN - 0.5) * 0.9 + (edge - 0.5) * 0.5));
-    let diff = clamp(dot(fmn, sunDir) * 0.5 + 0.5, 0.0, 1.0);
-    var foamCol = mix(vec3f(0.88, 0.91, 0.93), vec3f(1.07, 1.08, 1.06),
-                      smoothstep(0.05, 0.70, foamM));
-    foamCol *= 0.45 + 0.75 * diff;
-    foamCol += refl * 0.10;                                   // faint sky pickup
-    col = mix(col, foamCol, foamM);
-  }
-
-  // faint wind-blown spray streaks riding the crests (in-shader)
-  let sprayStreak = smoothstep(0.78, 0.97, streakN) * smoothstep(0.45, 0.8, crest) * 0.10;
-  col += u.sunColor * sprayStreak * (0.4 + 0.6 * sssW);
-
-  // distance haze toward horizon sky color (always on; ~0 up close)
-  {
-    let hz = skyColor(normalize(vec3f(rd.x, 0.02, rd.z)));
-    let f2 = 1.0 - exp(-max(tt - 30.0, 0.0) / 250.0);
-    col = mix(col, hz, clamp(f2, 0.0, 1.0) * 0.95);
-  }
-  return col;
-}
-
-/* ---------- post ---------- */
-fn aces(x: vec3f) -> vec3f {   // Stephen Hill fit
+/* ---------- post (shared by sky + water passes) ---------- */
+fn aces(x: vec3f) -> vec3f {
   let a: f32 = 2.51; let b: f32 = 0.03; let c: f32 = 2.43; let d: f32 = 0.59; let e: f32 = 0.14;
   return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3f(0.0), vec3f(1.0));
+}
+fn post(col0: vec3f, px: vec4f, ndc: vec2f) -> vec4f {
+  var col = col0 * u.exposure;
+  col = aces(col);
+  let luma = dot(col, vec3f(0.2126, 0.7152, 0.0722));
+  col = mix(vec3f(luma), col, 1.07);
+  let vg = 1.0 - u.vignetteAmt * pow(length(ndc * vec2f(0.72, 0.72)), 2.6);
+  col *= clamp(vg, 0.0, 1.0);
+  let seedI = i32(fract(u.grainSeed) * 977.0);
+  let gpx = vec2i(px.xy);
+  col += (pcg2d(gpx + seedI) - 0.5) * u.grainAmt;
+  col += (pcg2d(gpx + seedI + 31) - 0.5) * (1.0 / 255.0);
+  if (u.srgbOut > 0.5) {
+    return vec4f(col, 1.0);
+  }
+  return vec4f(pow(clamp(col, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2)), 1.0);
+}
+fn viewRay(px: vec4f) -> vec3f {
+  let uv2 = vec2f((px.x / u.resX) * 2.0 - 1.0, 1.0 - (px.y / u.resY) * 2.0);
+  let ndc = vec2f(uv2.x * u.aspect, uv2.y);
+  return normalize(u.camFwd + ndc.x * u.tanHalfFov * u.camRight + ndc.y * u.tanHalfFov * u.camUp);
+}
+fn ndcOf(px: vec4f) -> vec2f {
+  return vec2f(((px.x / u.resX) * 2.0 - 1.0) * u.aspect, 1.0 - (px.y / u.resY) * 2.0);
 }
 
 struct FragOut {
@@ -758,66 +509,257 @@ struct FragOut {
 }
 
 @fragment fn fsMain(@builtin(position) px: vec4f) -> FragOut {
-  // note: @builtin(position).y = 0 is the TOP row (WebGPU viewport flip)
-  let uv2 = vec2f((px.x / u.resX) * 2.0 - 1.0, 1.0 - (px.y / u.resY) * 2.0);
-  let ndc = vec2f(uv2.x * u.aspect, uv2.y);
-  let rd = normalize(u.camFwd + ndc.x * u.tanHalfFov * u.camRight + ndc.y * u.tanHalfFov * u.camUp);
-
-  var col: vec3f;
-  var vdepth: f32;
-  if (rd.y > -0.002) {
-    col = skyColor(rd);
-    vdepth = 1.0;
-  } else {
-    let tr = traceOcean(u.camPos, rd, u.time);
-    // analytic flat-plane distance; blend marched -> flat with distance so
-    // the horizon never shows a raymarch hit/miss seam
-    let tFlat = -u.camPos.y / rd.y;
-    var tUse: f32; var farF: f32;
-    if (tr.y < 0.5 || tFlat < 0.0) {
-      tUse = max(tFlat, 0.0); farF = 1.0;
-    } else {
-      // NOTE: farF is driven by the analytic tFlat (perfectly smooth across
-      // pixels); driving it by the marched tr.x produced terracing stripes
-      farF = smoothstep(250.0, 600.0, tFlat);
-      tUse = mix(tr.x, tFlat, farF);
-    }
-    col = shadeWater(u.camPos, rd, u.time, tUse, farF);
-    let vd = tUse * dot(rd, u.camFwd);
-    vdepth = vd / (vd + 200.0);
-  }
-
-  if (u._p5 > 0.5) {   // debug views
-    if (u._p5 < 1.5) { col = vec3f(rd.x * 0.5 + 0.5, rd.y * 0.5 + 0.5, 0.25); }
-    else if (u._p5 < 2.5) { col = skyColor(rd) * 0.05; }
-    else if (u._p5 < 3.5) { col = vec3f(traceOcean(u.camPos, rd, u.time).x / 420.0); }
-    else { col = vec3f(0.5); }
-    vdepth = 1.0;
-  }
-
-  /* post */
-  col *= u.exposure;
-  col = aces(col);
-  // slight photographic saturation lift
-  let luma = dot(col, vec3f(0.2126, 0.7152, 0.0722));
-  col = mix(vec3f(luma), col, 1.07);
-  // vignette
-  let vg = 1.0 - u.vignetteAmt * pow(length(ndc * vec2f(0.72, 0.72)), 2.6);
-  col *= clamp(vg, 0.0, 1.0);
-  // grain + dither (kills banding) — animated structure-free white noise
-  let seedI = i32(fract(u.grainSeed) * 977.0);
-  let gpx = vec2i(px.xy);
-  col += (pcg2d(gpx + seedI) - 0.5) * u.grainAmt;
-  col += (pcg2d(gpx + seedI + 31) - 0.5) * (1.0 / 255.0);
-
+  let rd = viewRay(px);
   var out: FragOut;
-  if (u.srgbOut > 0.5) {
-    out.color = vec4f(col, 1.0);          // canvas is sRGB: hardware converts
-  } else {
-    out.color = vec4f(pow(clamp(col, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2)), 1.0);
-  }
-  out.depth = vdepth;
+  out.color = post(skyColor(rd), px, ndcOf(px));
+  out.depth = 1.0;
   return out;
+}
+
+/* ---------- FFT field sampling (vertex stage) ---------- */
+fn fftLoad(tex: texture_2d<f32>, i: vec2i) -> vec4f {
+  return textureLoad(tex, i & vec2i(255), 0);
+}
+fn fftBilin(tex: texture_2d<f32>, xz: vec2f, L: f32) -> vec4f {
+  let p = xz / L * 256.0 - 0.5;
+  let i0 = floor(p);
+  let f = p - i0;
+  let ii = vec2i(i0);
+  let a = fftLoad(tex, ii);
+  let b = fftLoad(tex, ii + vec2i(1, 0));
+  let c = fftLoad(tex, ii + vec2i(0, 1));
+  let d = fftLoad(tex, ii + vec2i(1, 1));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+struct Field {
+  disp: vec2f, h: f32,
+  dhx: f32, dhz: f32,
+  dDxx: f32, dDxz: f32, dDzx: f32, dDzz: f32,
+};
+fn cascadeField(texD: texture_2d<f32>, texH: texture_2d<f32>, L: f32, xz: vec2f, deriv: bool) -> Field {
+  var o: Field;
+  let cD = fftBilin(texD, xz, L);
+  let cH = fftBilin(texH, xz, L);
+  o.disp = vec2f(cD.r, cD.b);
+  o.h = cH.r;
+  if (deriv) {
+    let e = (L / 256.0) * 1.5;
+    let pxD = fftBilin(texD, xz + vec2f(e, 0.0), L);
+    let pxH = fftBilin(texH, xz + vec2f(e, 0.0), L);
+    let mxD = fftBilin(texD, xz - vec2f(e, 0.0), L);
+    let mxH = fftBilin(texH, xz - vec2f(e, 0.0), L);
+    let pzD = fftBilin(texD, xz + vec2f(0.0, e), L);
+    let pzH = fftBilin(texH, xz + vec2f(0.0, e), L);
+    let mzD = fftBilin(texD, xz - vec2f(0.0, e), L);
+    let mzH = fftBilin(texH, xz - vec2f(0.0, e), L);
+    let inv = 1.0 / (2.0 * e);
+    o.dhx = (pxH.r - mxH.r) * inv;
+    o.dhz = (pzH.r - mzH.r) * inv;
+    o.dDxx = (pxD.r - mxD.r) * inv;
+    o.dDxz = (pzD.r - mzD.r) * inv;
+    o.dDzx = (pxD.b - mxD.b) * inv;
+    o.dDzz = (pzD.b - mzD.b) * inv;
+  }
+  return o;
+}
+
+struct OceanOut {
+  @builtin(position) pos: vec4f,
+  @location(0) world: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) foamJ: f32,
+  @location(3) crest: f32,
+};
+
+@vertex fn vsOcean(@location(0) local: vec2f) -> OceanOut {
+  let texelFine = LC2 / 256.0;
+  let snap = floor(u.camPos.xz / texelFine) * texelFine;
+  let wxz = snap + local;
+  let dist = length(wxz - u.camPos.xz);
+  // cascade fades: wide and gradual (the old 350-800 / 70-180 ranges stacked
+  // up with the detail + haze fades into a visible pale band / patch edge)
+  let w1 = 1.0 - smoothstep(220.0, 1300.0, dist);
+  let w2 = 1.0 - smoothstep(35.0, 550.0, dist);
+  var F = cascadeField(fftD0, fftH0, LC0, wxz, true);
+  let F1 = cascadeField(fftD1, fftH1, LC1, wxz, true);
+  let F2 = cascadeField(fftD2, fftH2, LC2, wxz, false);
+  F.disp += F1.disp * w1 + F2.disp * w2;
+  F.h += F1.h * w1 + F2.h * w2;
+  F.dhx += F1.dhx * w1;
+  F.dhz += F1.dhz * w1;
+  F.dDxx += F1.dDxx * w1;
+  F.dDxz += F1.dDxz * w1;
+  F.dDzx += F1.dDzx * w1;
+  F.dDzz += F1.dDzz * w1;
+
+  let wp = vec3f(wxz.x + F.disp.x, F.h, wxz.y + F.disp.y);
+  let n = normalize(vec3f(-F.dhx, 1.0, -F.dhz));
+  // Jacobian of the displaced surface: < 1 on folding crests
+  let J = (1.0 + F.dDxx) * (1.0 + F.dDzz) - F.dDxz * F.dDzx;
+  let foamJ = clamp((0.62 - J) * 2.4, 0.0, 1.0);
+  let crest = clamp(F.h / 2.3, 0.0, 1.0);
+
+  // homogeneous projection: w = view depth, so the GPU clipper handles
+  // vertices behind the eye exactly (a plain divide + z-clamp smears the
+  // triangles that cross the eye plane across the whole frame)
+  let v = wp - u.camPos;
+  let z = dot(v, u.camFwd);
+  let xn = dot(v, u.camRight) / (u.tanHalfFov * u.aspect);
+  let yn = dot(v, u.camUp) / u.tanHalfFov;
+  let zn = z * z / (z + 237.3);      // depth01(z) * w, depth01 = z/(z+237)
+  var o: OceanOut;
+  o.pos = vec4f(xn, yn, zn, z);
+  o.world = wp;
+  o.normal = n;
+  o.foamJ = foamJ;
+  o.crest = crest;
+  return o;
+}
+
+/* ---------- detail normals: analytic sinusoid sums (no lattice) ----------
+   Bands of directional sinusoids with hashed directions/phases; gradients
+   are analytic, so there is no value-noise lattice to alias into uniform
+   stipple. Bands fade by pixel footprint (LEAN-style): the faded energy is
+   accumulated into slope variance, which widens the GGX lobe with distance
+   so far water becomes clustered sheen instead of sandpaper sparkle. */
+fn hash11(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
+
+fn sinBand(p: vec2f, t: f32, seed: f32, lambda: f32, slopeAmp: f32,
+           wind: vec2f, wperp: vec2f, fade: f32,
+           acc: ptr<function, vec2f>, varAcc: ptr<function, f32>) {
+  let kk = 6.2831853 / lambda;
+  var g = vec2f(0.0);
+  for (var i = 0; i < 8; i++) {
+    let fi = f32(i) * 7.31 + seed * 19.7;
+    let h1 = hash11(fi * 1.13);
+    let h2 = hash11(fi * 2.71 + 4.7);
+    let h3 = hash11(fi * 3.97 + 9.2);
+    let dev = (h1 - 0.5) * 2.1;                        // ~+-60 deg around wind
+    let dir = normalize(wind * (cos(dev) + 0.30) + wperp * sin(dev));
+    let om = sqrt(9.81 * kk);
+    let ph = dot(dir, p) * kk + h2 * 6.2831853 - t * min(om, 2.8);
+    g += dir * (cos(ph) * (0.55 + 0.9 * h3));
+  }
+  *acc += g * (slopeAmp * 0.48 * fade);
+  *varAcc += slopeAmp * slopeAmp * (1.0 - fade * fade);
+}
+
+@fragment fn fsOcean(in: OceanOut) -> @location(0) vec4f {
+  let px = in.pos;
+  let p = in.world;
+  let t = u.time;
+  let toCam = u.camPos - p;
+  let dist = length(toCam);
+  let V = toCam / max(dist, 1e-4);
+  let rd = -V;
+  let sunDir = u.sunDir;
+  let crest = in.crest;
+  let wind = normalize(vec2f(u.windX, u.windZ));
+  let wperp = vec2f(-wind.y, wind.x);
+
+  /* ----- foam mask first: it flattens normals and kills glitter ----- */
+  let fp = p.xz;
+  let adv  = fp - wind * t * 0.9;
+  let adv2 = fp - wind * (t * 0.9 + 1.6);
+  let warp = vec2f(fbm(adv * 0.22 + vec2f(0.0, t * 0.05)),
+                   fbm(adv * 0.22 + vec2f(5.2, -t * 0.04))) - 0.5;
+  let bn   = fbm(adv * 0.55 + warp * 2.2);
+  let bn2  = fbm(adv2 * 0.55 + warp * 2.2);
+  let breakup = max(bn, bn2 * 0.72);
+  let streakN = fbm(vec2f(dot(adv, wind) * 0.07 - t * 0.22, dot(adv, wperp) * 0.33));
+  let bub  = vnoise(fp * 43.0 + vec2f(t * 0.9, -t * 0.7));
+  let bub2 = vnoise(fp * 91.0 + vec2f(-t * 1.3, t * 1.1));
+  let fizz = bub * 0.6 + bub2 * 0.4;
+  // Jacobian folding is the primary deposit; crest height supports it
+  let drive = clamp(in.foamJ * 1.30 + crest * 0.38, 0.0, 1.2);
+  var foamM = smoothstep(0.28, 0.52, drive);
+  foamM *= smoothstep(0.22, 0.42, breakup * 0.72 + streakN * 0.28);
+  foamM *= smoothstep(0.18, 0.42, fizz);
+  let patchN = fbm(adv * 0.045 + vec2f(t * 0.012, -t * 0.008));
+  let patchF = smoothstep(0.62, 0.74, patchN) * smoothstep(0.45, 0.62, crest)
+             * smoothstep(0.35, 0.60, bn) * smoothstep(0.18, 0.42, fizz);
+  foamM = clamp(foamM + patchF * 0.8, 0.0, 1.0);
+  let edge = fbm(fp * 2.6 + vec2f(-t * 0.5, t * 0.35));
+  foamM *= mix(0.55, 1.0, smoothstep(0.15, 0.75, edge + foamM * 0.55));
+  foamM *= u.foamAmt;
+  foamM = clamp(foamM, 0.0, 1.0);
+
+  /* ----- normals: FFT geometric + analytic sinusoid detail ----- */
+  var n = normalize(in.normal);
+  var slope = vec2f(0.0);
+  var varS = (1.0 - n.y) * 0.35;
+  // pixel footprint on the surface (grazing stretch included): a detail
+  // band smaller than the footprint fades into roughness (varS) instead of
+  // aliasing into stipple — the fade is gradual over decades of distance
+  let pixAng = 2.0 * u.tanHalfFov / u.resY;
+  let foot = dist * pixAng / max(V.y, 0.05);
+  let dFade1 = 1.0 / (1.0 + pow(foot / 5.7, 2.0));     // lambda 2.60 m
+  let dFade2 = 1.0 / (1.0 + pow(foot / 2.3, 2.0));     // lambda 1.05 m
+  let dFade3 = 1.0 / (1.0 + pow(foot / 0.92, 2.0));    // lambda 0.42 m
+  sinBand(p.xz, t, 1.0, 2.60, 0.058, wind, wperp, dFade1, &slope, &varS);
+  sinBand(p.xz, t, 2.0, 1.05, 0.044, wind, wperp, dFade2, &slope, &varS);
+  sinBand(p.xz, t, 3.0, 0.42, 0.030, wind, wperp, dFade3, &slope, &varS);
+  slope *= (1.0 - foamM * 0.85);
+  n = normalize(n + vec3f(slope.x, 0.0, slope.y));
+  n = normalize(mix(n, vec3f(0.0, 1.0, 0.0), foamM * 0.5));
+
+  /* ----- lighting ----- */
+  let ndv = max(dot(n, V), 0.0);
+  let fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
+  var R = reflect(rd, n);
+  R.y = abs(R.y) + 1e-4;
+  let refl = skyColor(normalize(R));
+
+  // sun glint: GGX lobe widened by slope variance (Toksvig/LEAN style)
+  // so distant sparkle spreads into sheen instead of aliasing into a grid
+  let rough = clamp(0.05 + varS * 2.8 + dist * 0.00020, 0.05, 0.50);
+  let Hv = normalize(V + sunDir);
+  let NoH = max(dot(n, Hv), 0.0);
+  let VoH = max(dot(V, Hv), 0.0);
+  let al = rough * rough;
+  let a2 = al * al;
+  let denom = NoH * NoH * (a2 - 1.0) + 1.0;
+  let Dggx = a2 / (PI * denom * denom);
+  let Fh = 0.02 + 0.98 * pow(1.0 - VoH, 5.0);
+  var glitter = u.sunColor * (Dggx * Fh * 2.6);
+  // discrete sparkles: only where the fine detail band is actually resolved
+  // (dFade3) — glints then cluster on real facets near the sun path instead
+  // of uniform world-noise specks sprayed across the whole sea
+  glitter += u.sunColor * pow(max(dot(normalize(R), sunDir), 0.0), 900.0) * 16.0 * dFade3;
+  glitter *= (1.0 - foamM);
+
+  // water body: blue-green absorption with distance + SSS through crests
+  let absorb = exp(-dist * vec3f(0.32, 0.14, 0.085));
+  let sssW = pow(clamp(dot(n, sunDir) * 0.5 + 0.5, 0.0, 1.0), 3.0);
+  var body = mix(vec3f(0.008, 0.072, 0.072), vec3f(0.030, 0.165, 0.130), sssW * clamp(crest * 1.6, 0.0, 1.0));
+  body *= (0.35 + 0.65 * absorb);
+  let sss = sssW * smoothstep(0.25, 0.95, crest) * u.sunColor * 0.55;
+
+  var col = mix(body, refl, fres) + sss;
+  col += glitter;
+  if (foamM > 0.003) {
+    let fmn = normalize(n + vec3f((bn - 0.5) * 0.9 + (edge - 0.5) * 0.5, 0.0,
+                                  (streakN - 0.5) * 0.9 + (edge - 0.5) * 0.5));
+    let diff = clamp(dot(fmn, sunDir) * 0.5 + 0.5, 0.0, 1.0);
+    var foamCol = mix(vec3f(0.88, 0.91, 0.93), vec3f(1.07, 1.08, 1.06),
+                      smoothstep(0.05, 0.70, foamM));
+    foamCol *= 0.45 + 0.75 * diff;
+    foamCol += refl * 0.10;
+    col = mix(col, foamCol, foamM);
+  }
+  let sprayStreak = smoothstep(0.78, 0.97, streakN) * smoothstep(0.45, 0.8, crest) * 0.10;
+  col += u.sunColor * sprayStreak * (0.4 + 0.6 * sssW);
+
+  // distance haze toward horizon sky color; the scale grows with camera
+  // altitude so aerial views are not fogged out (aerial perspective is
+  // about the path to the horizon, not the slant range to the surface)
+  {
+    let hz = skyColor(normalize(vec3f(rd.x, 0.02, rd.z)));
+    let hScale = 420.0 + u.camPos.y * 9.0;
+    let f2 = 1.0 - exp(-max(dist - 60.0, 0.0) / hScale);
+    col = mix(col, hz, clamp(f2, 0.0, 1.0) * 0.88);
+  }
+  return post(col, px, ndcOf(px));
 }
 
 /* ---------- spray particles (instanced billboards) ---------- */
@@ -831,9 +773,15 @@ struct VOut {
   let p = parts[ii];
   let wp = p.pos + (u.camRight * q.x * 1.30 + u.camUp * q.y * 0.80) * p.size;
   let v = wp - u.camPos;
-  let z = max(dot(v, u.camFwd), 0.05);
-  let x = dot(v, u.camRight) / (z * u.tanHalfFov * u.aspect);
-  let y = dot(v, u.camUp) / (z * u.tanHalfFov);
+  var z = dot(v, u.camFwd);
+  let lat = v - u.camFwd * z;
+  // near-plane pinch: vertices at/behind the eye are pulled toward the
+  // view axis so their triangles cannot smear across the whole frame
+  let latScale = clamp(z / 0.35, 0.0, 1.0);
+  let vv = u.camFwd * max(z, 0.12) + lat * latScale;
+  z = max(dot(vv, u.camFwd), 0.05);
+  let x = dot(vv, u.camRight) / (z * u.tanHalfFov * u.aspect);
+  let y = dot(vv, u.camUp) / (z * u.tanHalfFov);
   var o: VOut;
   o.pos = vec4f(x, y, z / (z + 200.0), 1.0);
   o.uv = q;
@@ -850,6 +798,194 @@ struct VOut {
   if (a < 0.004) { discard; }
   var col = mix(vec3f(0.72, 0.80, 0.85), vec3f(1.0, 0.94, 0.82), 0.30);
   return vec4f(col * a, a);             // premultiplied-ish
+}
+`;
+  /* ================= FFT ocean compute =================
+     Tessendorf-style spectral ocean. Per cascade (256x256), two packed
+     IFFT textures: fftD (.rg = S(Dx), .ba = S(Dz)) and fftH (.rg = S(h)).
+     specGen writes JONSWAP h0(k) with Gaussian-random phases (fixed seed).
+     evolve writes h~(k,t) spectra in bit-reversed layout; butterfly runs
+     8 horizontal + 8 vertical passes (ping-pong, ends in texture A).
+     Outputs: fftD.r = Dx, fftD.b = Dz, fftH.r = height.               */
+  const FFT_WGSL = /* wgsl */`
+struct SpecU {
+  tileL: f32, time: f32, amp: f32, chop: f32,
+  windX: f32, windZ: f32, kMin: f32, kMax: f32,
+  omegaP: f32, gamma: f32, seed: f32, _pad: f32,
+};
+@group(0) @binding(0) var h0Tex: texture_2d<f32>;
+@group(0) @binding(1) var dstTex: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var<uniform> su: SpecU;
+
+const PI2: f32 = 6.28318530718;
+const GN: f32 = 9.81;
+
+fn hash21(p: vec2f) -> f32 {
+  var p3 = fract(vec3f(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+fn cmul(a: vec2f, b: vec2f) -> vec2f {
+  return vec2f(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+// wavenumber (rad/m) of a natural-order texel index
+fn waveK(idx: vec2f, L: f32) -> vec2f {
+  let n = idx - 256.0 * floor(idx / 256.0);
+  let m = select(n, n - 256.0, n >= vec2f(128.0));
+  return (PI2 / L) * m;
+}
+
+/* ---- spectrum generation: JONSWAP + directional spreading ---- */
+@compute @workgroup_size(8, 8)
+fn specGen(@builtin(global_invocation_id) gid: vec3u) {
+  let idx = vec2f(gid.xy);
+  let kvec = waveK(idx, su.tileL);
+  let k = length(kvec);
+  var h0 = vec2f(0.0);
+  if (k > 1e-5) {
+    let om = sqrt(GN * k);
+    let sig = select(0.09, 0.07, om < su.omegaP);
+    let r = exp(-pow(om - su.omegaP, 2.0) / (2.0 * sig * sig * su.omegaP * su.omegaP));
+    var S = pow(om, -5.0) * exp(-1.25 * pow(su.omegaP / om, 4.0)) * pow(su.gamma, r);
+    let th = atan2(kvec.y, kvec.x);
+    let wth = atan2(su.windZ, su.windX);
+    let dth = th - wth;
+    // directional spread: broadened from cos^12 — the narrow lobe made
+    // endless parallel crest trains (corduroy); wider lobes + a second
+    // cross lobe shorten crests into broken, photographic wave faces
+    let spread = pow(max(cos(dth), 0.0), 5.0)
+               + 0.42 * pow(max(cos(dth - 0.61), 0.0), 3.0)
+               + 0.26 * pow(max(cos(dth + 0.85), 0.0), 3.0)
+               + 0.035;
+    S *= spread;
+    // swell: narrow long-wave peak (om 0.42 -> lambda ~350 m, inside the
+    // 997 m cascade's band) crossing the wind sea at +0.38 rad. Narrow in
+    // omega => strong wave grouping (sets + lulls); the plain JONSWAP tail
+    // leaves the big cascade nearly empty, which read as a single-scale sea.
+    let omS = 0.42; let sigS = 0.10;
+    let gS = exp(-pow(om - omS, 2.0) / (2.0 * sigS * sigS));
+    let spreadS = pow(max(cos(dth - 0.38), 0.0), 10.0) + 0.008;
+    S += 1.00 * gS * spreadS;
+    S *= (0.5 * sqrt(GN / k)) / max(k, 1e-5);       // -> 2D cartesian density
+    let lk = log2(k);
+    let wBand = smoothstep(log2(su.kMin), log2(su.kMin) + 0.55, lk)
+              * (1.0 - smoothstep(log2(su.kMax) - 0.55, log2(su.kMax), lk));
+    S *= wBand;
+    let u1 = max(hash21(idx * 1.37 + su.seed * 17.0), 1e-6);
+    let u2 = hash21(idx * 2.11 + su.seed * 29.0);
+    let mag = sqrt(-2.0 * log(u1));
+    let g = vec2f(mag * cos(PI2 * u2), mag * sin(PI2 * u2));
+    let dk = PI2 / su.tileL;
+    h0 = g * sqrt(max(S, 0.0)) * dk * su.amp;
+  }
+  textureStore(dstTex, vec2i(gid.xy), vec4f(h0, 0.0, 0.0));
+}
+
+fn bitrev8(x: u32) -> u32 {
+  var v = x; var r = 0u;
+  for (var i = 0u; i < 8u; i++) { r = (r << 1u) | (v & 1u); v >>= 1u; }
+  return r;
+}
+fn evolvedH(nx: u32, ny: u32) -> vec2f {
+  let idx = vec2f(f32(nx), f32(ny));
+  let kvec = waveK(idx, su.tileL);
+  let k = length(kvec);
+  if (k < 1e-5) { return vec2f(0.0); }
+  let om = sqrt(GN * k);
+  let h0a = textureLoad(h0Tex, vec2i(i32(nx), i32(ny)), 0).rg;
+  let mx = (256u - nx) & 255u; let my = (256u - ny) & 255u;
+  let h0b = textureLoad(h0Tex, vec2i(i32(mx), i32(my)), 0).rg;
+  let ph = om * su.time;
+  let e1 = vec2f(cos(ph), -sin(ph));
+  let e2 = vec2f(cos(ph), sin(ph));
+  return cmul(h0a, e1) + cmul(vec2f(h0b.x, -h0b.y), e2);
+}
+
+/* ---- evolution: displacement spectra (packed .rg/.ba channels) ---- */
+@compute @workgroup_size(8, 8)
+fn evolve(@builtin(global_invocation_id) gid: vec3u) {
+  let nx = bitrev8(gid.x); let ny = bitrev8(gid.y);
+  let idx = vec2f(f32(nx), f32(ny));
+  let kvec = waveK(idx, su.tileL);
+  let k = length(kvec);
+  var outv = vec4f(0.0);
+  if (k > 1e-5) {
+    let ht = evolvedH(nx, ny);
+    let kh = kvec / k;
+    let sc = 1.0 / 65536.0;
+    let dxs = cmul(vec2f(0.0, -1.0), ht) * kh.x * su.chop * sc;
+    let dzs = cmul(vec2f(0.0, -1.0), ht) * kh.y * su.chop * sc;
+    outv = vec4f(dxs, dzs);
+  }
+  textureStore(dstTex, vec2i(gid.xy), outv);
+}
+
+/* ---- evolution: height spectrum ---- */
+@compute @workgroup_size(8, 8)
+fn evolveH(@builtin(global_invocation_id) gid: vec3u) {
+  let nx = bitrev8(gid.x); let ny = bitrev8(gid.y);
+  var outv = vec4f(0.0);
+  let ht = evolvedH(nx, ny);
+  outv = vec4f(ht * (1.0 / 65536.0), vec2f(0.0));
+  textureStore(dstTex, vec2i(gid.xy), outv);
+}
+
+/* ---- butterfly pass (one stage, one direction) ---- */
+struct PassU { span: u32, horiz: u32, _p0: u32, _p1: u32 };
+@group(0) @binding(3) var srcTex: texture_2d<f32>;
+@group(0) @binding(4) var dstTex2: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(5) var<uniform> pu: PassU;
+
+@compute @workgroup_size(8, 8)
+fn butterfly(@builtin(global_invocation_id) gid: vec3u) {
+  let span = i32(pu.span);
+  let half = span >> 1;
+  var idx: i32; var fixed: i32;
+  if (pu.horiz == 1u) { idx = i32(gid.x); fixed = i32(gid.y); }
+  else { idx = i32(gid.y); fixed = i32(gid.x); }
+  let block = idx / span;
+  let off = idx - block * span;
+  let upper = off >= half;
+  let j = off - select(0, half, upper);
+  let ia = block * span + j;
+  let ib = ia + half;
+  let tw = (PI2 * f32(j)) / f32(span);
+  var w = vec2f(cos(tw), sin(tw));       // synthesis sign e^{+i tw}
+  if (upper) { w = -w; }
+  var A: vec4f; var B: vec4f;
+  if (pu.horiz == 1u) {
+    A = textureLoad(srcTex, vec2i(ia, fixed), 0);
+    B = textureLoad(srcTex, vec2i(ib, fixed), 0);
+  } else {
+    A = textureLoad(srcTex, vec2i(fixed, ia), 0);
+    B = textureLoad(srcTex, vec2i(fixed, ib), 0);
+  }
+  let outv = vec4f(A.rg + cmul(B.rg, w), A.ba + cmul(B.ba, w));
+  if (pu.horiz == 1u) { textureStore(dstTex2, vec2i(idx, fixed), outv); }
+  else { textureStore(dstTex2, vec2i(fixed, idx), outv); }
+}
+/* ---- camera height probe: bilinear FFT height at one world XZ ---- */
+@group(0) @binding(6) var<storage, read_write> probeOut: array<f32>;
+@group(0) @binding(7) var<uniform> probeU: vec4f;
+@group(0) @binding(8) var pH0: texture_2d<f32>;
+@group(0) @binding(9) var pH1: texture_2d<f32>;
+@group(0) @binding(10) var pH2: texture_2d<f32>;
+fn bilinR(tex: texture_2d<f32>, xz: vec2f, L: f32) -> f32 {
+  let p = xz / L * 256.0 - 0.5;
+  let i0 = floor(p);
+  let f = p - i0;
+  let ii = vec2i(i0);
+  let m = vec2i(255);
+  let a = textureLoad(tex, ii & m, 0).r;
+  let b = textureLoad(tex, (ii + vec2i(1, 0)) & m, 0).r;
+  let c = textureLoad(tex, (ii + vec2i(0, 1)) & m, 0).r;
+  let d = textureLoad(tex, (ii + vec2i(1, 1)) & m, 0).r;
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+@compute @workgroup_size(1)
+fn camProbe() {
+  let xz = probeU.xy;
+  probeOut[0] = bilinR(pH0, xz, 997.0) + bilinR(pH1, xz, 251.0) + bilinR(pH2, xz, 61.0);
 }
 `;
 
@@ -901,6 +1037,277 @@ struct VOut {
       { binding: 2, resource: { buffer: partBuf } },
     ],
   });
+
+
+  /* ================= FFT ocean setup ================= */
+  const FFT_L = [997, 251, 61];            // cascade tile sizes (m)
+  const FFT_SEED = [3.7, 11.3, 27.9];
+  const FFT_CHOP = [1.05, 0.95, 0.85];
+  const fftMod = device.createShaderModule({ code: FFT_WGSL });
+  const texUsage = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC;
+  function fftTex() {
+    return device.createTexture({ size: [256, 256], format: 'rgba32float', usage: texUsage });
+  }
+  const cascades = FFT_L.map((L, c) => ({
+    L, h0: fftTex(),
+    D: [fftTex(), fftTex()], H: [fftTex(), fftTex()],
+    uni: device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
+    arr: new Float32Array(12),
+  }));
+  const layoutGen = device.createBindGroupLayout({ entries: [
+    { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba32float' } },
+    { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+  ]});
+  const layoutEvo = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+    { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba32float' } },
+    { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+  ]});
+  const layoutFly = device.createBindGroupLayout({ entries: [
+    { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+    { binding: 4, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba32float' } },
+    { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+  ]});
+  const specGenPipe = device.createComputePipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [layoutGen] }), compute: { module: fftMod, entryPoint: 'specGen' } });
+  const evoLayout = device.createPipelineLayout({ bindGroupLayouts: [layoutEvo] });
+  const evolvePipe = device.createComputePipeline({ layout: evoLayout, compute: { module: fftMod, entryPoint: 'evolve' } });
+  const evolveHPipe = device.createComputePipeline({ layout: evoLayout, compute: { module: fftMod, entryPoint: 'evolveH' } });
+  const flyPipe = device.createComputePipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [layoutFly] }), compute: { module: fftMod, entryPoint: 'butterfly' } });
+
+  // static butterfly pass uniforms: 8 horizontal + 8 vertical stages
+  const flyUni = [];
+  for (let p = 0; p < 16; p++) {
+    const b = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(b, 0, new Uint32Array([2 << (p & 7), p < 8 ? 1 : 0, 0, 0]));
+    flyUni.push(b);
+  }
+  for (const cs of cascades) {
+    cs.genBG = device.createBindGroup({ layout: layoutGen, entries: [
+      { binding: 1, resource: cs.h0.createView() },
+      { binding: 2, resource: { buffer: cs.uni } },
+    ]});
+    cs.evoBGD = device.createBindGroup({ layout: layoutEvo, entries: [
+      { binding: 0, resource: cs.h0.createView() },
+      { binding: 1, resource: cs.D[0].createView() },
+      { binding: 2, resource: { buffer: cs.uni } },
+    ]});
+    cs.evoBGH = device.createBindGroup({ layout: layoutEvo, entries: [
+      { binding: 0, resource: cs.h0.createView() },
+      { binding: 1, resource: cs.H[0].createView() },
+      { binding: 2, resource: { buffer: cs.uni } },
+    ]});
+    cs.flyBG = { D: [], H: [] };
+    for (const key of ['D', 'H']) {
+      for (let p = 0; p < 16; p++) {
+        cs.flyBG[key].push(device.createBindGroup({ layout: layoutFly, entries: [
+          { binding: 3, resource: cs[key][p & 1].createView() },
+          { binding: 4, resource: cs[key][(p + 1) & 1].createView() },
+          { binding: 5, resource: { buffer: flyUni[p] } },
+        ]}));
+      }
+    }
+  }
+
+  /* spectrum shape mirror (JS) — only used for the analytic amp estimate;
+     the real calibration measures the GPU heightfield directly. */
+  function specSigma2(L, kMin, kMax, omegaP, wind) {
+    const dk = 2 * Math.PI / L;
+    const wth = Math.atan2(wind[1], wind[0]);
+    const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    let sum = 0;
+    for (let iy = 0; iy < 256; iy++) for (let ix = 0; ix < 256; ix++) {
+      const nx = ix >= 128 ? ix - 256 : ix, ny = iy >= 128 ? iy - 256 : iy;
+      const kx = dk * nx, kz = dk * ny;
+      const k = Math.hypot(kx, kz);
+      if (k < 1e-5) continue;
+      const om = Math.sqrt(9.81 * k);
+      const sig = om < omegaP ? 0.07 : 0.09;
+      const r = Math.exp(-((om - omegaP) ** 2) / (2 * sig * sig * omegaP * omegaP));
+      let S = Math.pow(om, -5) * Math.exp(-1.25 * Math.pow(omegaP / om, 4)) * Math.pow(3.3, r);
+      const dth = Math.atan2(kz, kx) - wth;
+      S *= Math.pow(Math.max(Math.cos(dth), 0), 5) + 0.42 * Math.pow(Math.max(Math.cos(dth - 0.61), 0), 3)
+         + 0.26 * Math.pow(Math.max(Math.cos(dth + 0.85), 0), 3) + 0.035;
+      // swell peak (mirrors specGen): narrow, long-wave, crossing at +0.38 rad
+      S += 1.00 * Math.exp(-((om - 0.42) ** 2) / (2 * 0.10 * 0.10))
+                 * (Math.pow(Math.max(Math.cos(dth - 0.38), 0), 10) + 0.008);
+      S *= (0.5 * Math.sqrt(9.81 / k)) / k;
+      const lk = Math.log2(k);
+      S *= sstep(Math.log2(kMin), Math.log2(kMin) + 0.55, lk) * (1 - sstep(Math.log2(kMax) - 0.55, Math.log2(kMax), lk));
+      sum += S * dk * dk;
+    }
+    return sum;
+  }
+
+  let specKey = '', specBusy = false, specAmp = 0;
+  function specParams() {
+    const ws = WP(3, CFG.waveScale);
+    const wind = frameSun().wind;
+    const wl = Math.hypot(wind[0], wind[1]) || 1;
+    const U = 12 * ws;                                   // wind speed m/s
+    const omegaP = Math.max(0.5, 0.877 * 9.81 / Math.max(U, 2.5)); // PM peak
+    const Hs = 2.9 * Math.pow(ws, 1.35);                 // target sig. height
+    return { ws, wind: [wind[0] / wl, wind[1] / wl], omegaP, Hs };
+  }
+  async function regenSpectrum() {
+    if (specBusy) return;
+    specBusy = true;
+    try {
+      const P = specParams();
+      const bands = FFT_L.map((L, c) => [
+        2 * Math.PI / L,
+        c < 2 ? 2 * Math.PI / FFT_L[c + 1] : 12.5,
+      ]);
+      // analytic first guess for amp (calibration below corrects it)
+      let sumS = 0;
+      FFT_L.forEach((L, c) => { sumS += specSigma2(L, bands[c][0], bands[c][1], P.omegaP, P.wind); });
+      let amp = specAmp > 0 ? specAmp : (P.Hs / 4) / Math.sqrt(Math.max(2 * sumS, 1e-12));
+      for (let iter = 0; iter < 2; iter++) {
+        const tilt = [1, 1 + 0.10 * (P.ws - 1), 1 + 0.35 * (P.ws - 1)];
+        cascades.forEach((cs, c) => {
+          cs.arr.set([cs.L, 2.0, amp * tilt[c], FFT_CHOP[c], P.wind[0], P.wind[1],
+                      bands[c][0], bands[c][1], P.omegaP, 3.3, FFT_SEED[c], 0]);
+          device.queue.writeBuffer(cs.uni, 0, cs.arr);
+        });
+        const enc = device.createCommandEncoder();
+        let cp = enc.beginComputePass();
+        for (const cs of cascades) { cp.setPipeline(specGenPipe); cp.setBindGroup(0, cs.genBG); cp.dispatchWorkgroups(32, 32); }
+        cp.end();
+        encodeFFT(enc, 2.0);
+        const readBufs = cascades.map(() => device.createBuffer({ size: 256 * 256 * 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }));
+        cascades.forEach((cs, c) => enc.copyTextureToBuffer({ texture: cs.H[0] }, { buffer: readBufs[c], bytesPerRow: 4096 }, [256, 256]));
+        device.queue.submit([enc.finish()]);
+        let varSum = 0;
+        for (const rb of readBufs) {
+          await rb.mapAsync(GPUMapMode.READ);
+          const d = new Float32Array(rb.getMappedRange());
+          let s = 0;
+          for (let i = 0; i < d.length; i += 4) s += d[i] * d[i];
+          varSum += s / (256 * 256);
+          rb.unmap(); rb.destroy();
+        }
+        const sigma = Math.sqrt(varSum);
+        if (sigma < 1e-6) break;
+        const target = P.Hs / 4;
+        const corr = target / sigma;
+        amp *= corr;
+        if (Math.abs(corr - 1) < 0.03) break;
+      }
+      specAmp = amp;
+    } catch (e) {
+      console.warn('spectrum regen failed:', e && e.message);
+    }
+    specBusy = false;
+  }
+
+  function encodeFFT(enc, wt) {
+    for (const cs of cascades) {
+      cs.arr[1] = wt;
+      device.queue.writeBuffer(cs.uni, 0, cs.arr);
+    }
+    device.queue.writeBuffer(probeUniB, 0, new Float32Array([cam.pos[0], cam.pos[2], 0, 0]));
+    const cp = enc.beginComputePass();
+    for (const cs of cascades) {
+      cp.setPipeline(evolvePipe); cp.setBindGroup(0, cs.evoBGD); cp.dispatchWorkgroups(32, 32);
+      cp.setPipeline(evolveHPipe); cp.setBindGroup(0, cs.evoBGH); cp.dispatchWorkgroups(32, 32);
+      cp.setPipeline(flyPipe);
+      for (const key of ['D', 'H']) {
+        for (let p = 0; p < 16; p++) { cp.setBindGroup(0, cs.flyBG[key][p]); cp.dispatchWorkgroups(32, 32); }
+      }
+    }
+    cp.setPipeline(probePipe); cp.setBindGroup(0, probeBG); cp.dispatchWorkgroups(1);
+    cp.end();
+  }
+
+  /* ================= ocean mesh ================= */
+  const bglMesh = device.createBindGroupLayout({ entries: [0, 1, 2, 3, 4, 5].map(b => ({
+    binding: b, visibility: GPUShaderStage.VERTEX, texture: { sampleType: 'unfilterable-float' },
+  }))});
+  const meshBG = device.createBindGroup({ layout: bglMesh, entries: [
+    { binding: 0, resource: cascades[0].D[0].createView() },
+    { binding: 1, resource: cascades[0].H[0].createView() },
+    { binding: 2, resource: cascades[1].D[0].createView() },
+    { binding: 3, resource: cascades[1].H[0].createView() },
+    { binding: 4, resource: cascades[2].D[0].createView() },
+    { binding: 5, resource: cascades[2].H[0].createView() },
+  ]});
+  const meshPipe = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [bgl, bglMesh] }),
+    vertex: {
+      module: shaderMod, entryPoint: 'vsOcean',
+      buffers: [{ arrayStride: 8, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }] }],
+    },
+    fragment: { module: shaderMod, entryPoint: 'fsOcean', targets: [{ format }] },
+    primitive: { topology: 'triangle-list', cullMode: 'none' },
+    depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+  });
+  let meshVerts = null, meshIdx = null, meshIndexCount = 0;
+  {
+    const SEC = 160;
+    const radii = [];
+    let r = 0, s = 0.38;
+    while (r < 1400) { r += s; radii.push(r); s *= 1.045; }
+    while (r < 12000) { r += s; radii.push(r); s *= 1.16; }
+    const pos = [0, 0];
+    for (const rr of radii) for (let j = 0; j < SEC; j++) {
+      const a = (j / SEC) * Math.PI * 2;
+      pos.push(Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    const idx = [];
+    const ringStart = ri => 1 + ri * SEC;
+    for (let j = 0; j < SEC; j++) idx.push(0, ringStart(0) + j, ringStart(0) + (j + 1) % SEC);
+    for (let ri = 0; ri < radii.length - 1; ri++) {
+      for (let j = 0; j < SEC; j++) {
+        const j1 = (j + 1) % SEC;
+        const a = ringStart(ri) + j, b = ringStart(ri) + j1;
+        const c2 = ringStart(ri + 1) + j, d = ringStart(ri + 1) + j1;
+        idx.push(a, c2, b, b, c2, d);
+      }
+    }
+    meshIndexCount = idx.length;
+    meshVerts = device.createBuffer({ size: pos.length * 4, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(meshVerts, 0, new Float32Array(pos));
+    meshIdx = device.createBuffer({ size: idx.length * 4, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(meshIdx, 0, new Uint32Array(idx));
+  }
+
+
+  /* ---- camera height probe + lift (keeps the eye above the FFT sea) ---- */
+  const probeBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const probeStage = device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const probeUniB = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const layoutProbe = device.createBindGroupLayout({ entries: [
+    { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+    { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+    { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+    { binding: 9, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+    { binding: 10, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+  ]});
+  const probePipe = device.createComputePipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [layoutProbe] }), compute: { module: fftMod, entryPoint: 'camProbe' } });
+  const probeBG = device.createBindGroup({ layout: layoutProbe, entries: [
+    { binding: 6, resource: { buffer: probeBuf } },
+    { binding: 7, resource: { buffer: probeUniB } },
+    { binding: 8, resource: cascades[0].H[0].createView() },
+    { binding: 9, resource: cascades[1].H[0].createView() },
+    { binding: 10, resource: cascades[2].H[0].createView() },
+  ]});
+  let liftCur = 0, liftTarget = 0, probeBusy = false, probeTick = 0;
+  function updateLift(dt) {
+    if (liftTarget > liftCur) liftCur = liftTarget;              // rise instantly
+    else liftCur += (liftTarget - liftCur) * Math.min(1, dt * 0.7); // settle slowly
+    probeTick++;
+    if (!probeBusy && probeTick % 6 === 0) {
+      probeBusy = true;
+      const e2 = device.createCommandEncoder();
+      e2.copyBufferToBuffer(probeBuf, 0, probeStage, 0, 4);
+      device.queue.submit([e2.finish()]);
+      probeStage.mapAsync(GPUMapMode.READ).then(() => {
+        const h = new Float32Array(probeStage.getMappedRange())[0];
+        probeStage.unmap();
+        window.__probeH = h;
+        liftTarget = Math.max(0, Math.min(8, h + 1.5 - cam.pos[1]));
+      }).catch(() => {}).finally(() => { probeBusy = false; });
+    }
+  }
 
   /* ---------------- camera ---------------- */
   const sunEl = CFG.sunElevationDeg * Math.PI / 180;
@@ -1118,7 +1525,7 @@ struct VOut {
     const fs = frameSun();
     const tanH = Math.tan((WP(10, CFG.fovDeg) * Math.PI / 180) / 2);
     U[0] = wt; U[1] = w; U[2] = hgt; U[3] = WP(2, CFG.exposure);
-    U[4] = cam.pos[0]; U[5] = cam.pos[1]; U[6] = cam.pos[2]; U[7] = 0;
+    U[4] = cam.pos[0]; U[5] = cam.pos[1] + liftCur; U[6] = cam.pos[2]; U[7] = 0;
     U[8] = cam.fwd[0]; U[9] = cam.fwd[1]; U[10] = cam.fwd[2]; U[11] = 0;
     U[12] = cam.right[0]; U[13] = cam.right[1]; U[14] = cam.right[2]; U[15] = 0;
     U[16] = cam.up[0]; U[17] = cam.up[1]; U[18] = cam.up[2]; U[19] = 0;
@@ -1146,6 +1553,8 @@ struct VOut {
       // rebuild the GPU wave table while the wave-scale slider glides
       const ws = wasm.getParam(3);
       if (Math.abs(ws - lastBuiltScale) > 0.002) { buildWaves(ws); uploadWaves(); lastBuiltScale = ws; }
+      const sk = ws.toFixed(3) + '|' + wasm.getParam(1).toFixed(1);
+      if (sk !== specKey) { specKey = sk; regenSpectrum(); }
       // auto-quality governor (WASM): drop render scale if frames run long
       if (autoQ && !READBACK) {
         const sug = wasm.pushFrame(dt * 1000);
@@ -1155,11 +1564,13 @@ struct VOut {
     }
     feedMoveKeys();
     (wasmLive ? updateCameraWASM : updateCameraJS)(wt);
+    updateLift(dt);
     stepParticles(Math.min(dt, 0.05), wt);
     writeUniforms(wt, now);
     writeParticles();
 
     const encoder = device.createCommandEncoder();
+    encodeFFT(encoder, wt);
     const colorView = READBACK ? colorTex.createView() : ctx.getCurrentTexture().createView();
     const pass = encoder.beginRenderPass({
       colorAttachments: [{ view: colorView, loadOp: 'clear', clearValue: [0.02, 0.03, 0.05, 1], storeOp: 'store' }],
@@ -1168,6 +1579,12 @@ struct VOut {
     pass.setPipeline(mainPipe);
     pass.setBindGroup(0, bindGroup);
     pass.draw(3);
+    pass.setPipeline(meshPipe);
+    pass.setBindGroup(0, bindGroup);
+    pass.setBindGroup(1, meshBG);
+    pass.setVertexBuffer(0, meshVerts);
+    pass.setIndexBuffer(meshIdx, 'uint32');
+    pass.drawIndexed(meshIndexCount);
     if (!NO_SPRAY) {
       pass.setPipeline(sprayPipe);
       pass.setVertexBuffer(0, quadBuf);
@@ -1204,6 +1621,8 @@ struct VOut {
     }
     requestAnimationFrame(frame);
   }
+  specKey = wasmLive ? wasm.getParam(3).toFixed(3) + '|' + wasm.getParam(1).toFixed(1) : 'static';
+  await regenSpectrum();
   requestAnimationFrame(frame);
 })().catch(err => {
   console.error(err);
