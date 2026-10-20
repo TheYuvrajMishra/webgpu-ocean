@@ -42,6 +42,17 @@ let emaMs: f64 = -1;
 let modeTgt: f64 = 0;
 let modeCur: f64 = 0;
 
+// WASD movement: axes set from JS each frame (smoothed there), integrated
+// here in tick() relative to the current camera yaw. Offsets accumulate on
+// top of the sun-drift path, so the user can fly anywhere and the swell is
+// sampled at the moved position.
+let mvF: f64 = 0, mvS: f64 = 0, mvU: f64 = 0, mvBoost: f64 = 0;
+let mvX: f64 = 0, mvY: f64 = 0, mvZ: f64 = 0;
+
+export function setMove(f: f64, s: f64, u: f64, boost: f64): void {
+  mvF = f; mvS = s; mvU = u; mvBoost = boost;
+}
+
 export function setCamMode(m: i32): void {
   modeTgt = m < 0 ? 0 : (m > 2 ? 2 : <f64>m);
 }
@@ -94,6 +105,7 @@ export function addDrag(dx: f64, dy: f64): void {
 
 export function resetView(): void {
   dragYawT = 0; dragPitchT = 0; dragYaw = 0; dragPitch = 0;
+  mvX = 0; mvY = 0; mvZ = 0;
 }
 
 export function tick(dt: f64, t: f64, yawOvr: f64, pitchOvr: f64): void {
@@ -125,9 +137,8 @@ export function tick(dt: f64, t: f64, yawOvr: f64, pitchOvr: f64): void {
   else hEff = 30.0 * (2.0 - modeCur) + 75.0 * (modeCur - 1.0);
 
   const drift: f64 = cur[6] * (1.0 + 1.6 * airB);
-  const cx: f64 = Math.cos(az) * t * drift;
-  const cz: f64 = Math.sin(az) * t * drift + 4.0 * Math.sin(t * 0.045);
-  const h: f64 = swell(cx, cz, t);
+  const cx0: f64 = Math.cos(az) * t * drift;
+  const cz0: f64 = Math.sin(az) * t * drift + 4.0 * Math.sin(t * 0.045);
 
   const yawBase: f64 = yawOvr != yawOvr ? az + Math.sin(t * 0.03) * 0.22 : yawOvr;
   const yawT: f64 = yawBase + dragYaw;
@@ -136,6 +147,24 @@ export function tick(dt: f64, t: f64, yawOvr: f64, pitchOvr: f64): void {
   dragPitch += (dragPitchT - dragPitch) * kd;
   const ky: f64 = dt <= 0 ? 1.0 : (dt * 2.5 < 1.0 ? dt * 2.5 : 1.0);
   yaw += (yawT - yaw) * ky;
+
+  // WASD movement: integrate the user's offset relative to the camera yaw,
+  // faster when airborne; vertical via mvU. Position + swell use the moved
+  // spot so the camera keeps riding the waves wherever the user flies.
+  if (dt > 0 && (mvF != 0.0 || mvS != 0.0 || mvU != 0.0)) {
+    const spd: f64 = (16.0 + 60.0 * airB) * (mvBoost > 0.5 ? 4.0 : 1.0);
+    const sy2: f64 = Math.sin(yaw), cy2: f64 = Math.cos(yaw);
+    mvX += (cy2 * mvF - sy2 * mvS) * spd * dt;
+    mvZ += (sy2 * mvF + cy2 * mvS) * spd * dt;
+    mvY += mvU * 11.0 * (mvBoost > 0.5 ? 3.0 : 1.0) * dt;
+    // clamp the offset itself: without this, holding Q winds mvY far below
+    // the floor and E then takes forever to climb back out
+    if (mvY > 150.0) mvY = 150.0;
+    if (mvY < -12.0) mvY = -12.0;
+  }
+  const cx: f64 = cx0 + mvX;
+  const cz: f64 = cz0 + mvZ;
+  const h: f64 = swell(cx, cz, t);
 
   const fx: f64 = Math.cos(yaw), fz: f64 = Math.sin(yaw);
   const hF: f64 = swell(cx + fx * 2.5, cz + fz * 2.5, t);
@@ -163,16 +192,25 @@ export function tick(dt: f64, t: f64, yawOvr: f64, pitchOvr: f64): void {
   camRX = r0x * cr + u0x * sr; camRY = r0y * cr + u0y * sr; camRZ = r0z * cr + u0z * sr;
   camUX = u0x * cr - r0x * sr; camUY = u0y * cr - r0y * sr; camUZ = u0z * cr - r0z * sr;
 
-  camPX = cx; camPY = h * 0.55 * (1.0 - airB) + hEff; camPZ = cz;
+  camPX = cx; camPZ = cz;
+  camPY = h * 0.55 * (1.0 - airB) + hEff + mvY;
+  // Floor: keep real clearance over the water. h is only the 5-wave swell
+  // approximation of the 13-wave GPU surface, so 0.9 m over h still clipped
+  // crests / read as underwater in troughs. 2.2 m over the ride height and
+  // 1.6 m over the local surface, whichever is higher.
+  const minY: f64 = Math.max(h + 1.6, h * 0.55 * (1.0 - airB) + 2.2);
+  if (camPY < minY) camPY = minY;
 }
 
 // Auto-quality governor: feed measured frame ms, returns suggested render
-// scale (0.6 / 0.75 / 1.0) or -1 for "no change".
+// scale (0.75 / 0.85 / 1.0) or -1 for "no change". Tuned to protect the
+// realistic look: it only steps down on genuinely slow frames and recovers
+// quickly (the old 0.6 floor + slow EMA left the scene stuck blurry).
 export function pushFrame(ms: f64): f32 {
-  if (emaMs < 0) emaMs = ms; else emaMs = emaMs * 0.95 + ms * 0.05;
-  if (emaMs > 30.0) return 0.6;
-  if (emaMs > 22.0) return 0.75;
-  if (emaMs < 13.0) return 1.0;
+  if (emaMs < 0) emaMs = ms; else emaMs = emaMs * 0.92 + ms * 0.08;
+  if (emaMs > 40.0) return 0.75;
+  if (emaMs > 27.0) return 0.85;
+  if (emaMs < 15.0) return 1.0;
   return -1.0;
 }
 
