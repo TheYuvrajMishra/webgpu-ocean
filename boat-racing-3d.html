@@ -1443,10 +1443,7 @@ function cross(a, b) {
 function mat4Persp(out, tanH, aspect, near, far) {
   const f = 1 / tanH;
   out.fill(0);
-  // NOTE: out[5] is NEGATED to flip Y, matching the raymarched water which
-  // manually flips Y for the canvas (see fsMain ndc computation). Without
-  // this, meshes render vertically mirrored relative to the water.
-  out[0] = f / aspect; out[5] = -f; out[10] = far / (far - near); out[11] = 1;
+  out[0] = f / aspect; out[5] = f; out[10] = far / (far - near); out[11] = 1;
   out[14] = -far * near / (far - near);
   return out;
 }
